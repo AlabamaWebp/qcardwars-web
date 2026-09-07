@@ -1,0 +1,24 @@
+{
+  "name": "qcardwars-web",
+  "private": true,
+  "version": "0.1.0",
+  "packageManager": "pnpm@12.3.4",
+  "engines": {
+    "node": ">=22.22.3"
+  },
+  "scripts": {
+    "dev": "pnpm --filter @qcw/game-core build && concurrently -k -n CORE,SERVER,WEB \"pnpm --filter @qcw/game-core dev\" \"pnpm --filter @qcw/server dev\" \"pnpm --filter @qcw/web dev\"",
+    "build": "pnpm --filter @qcw/game-core build && pnpm --filter @qcw/web build && pnpm --filter @qcw/server build",
+    "start": "pnpm --filter @qcw/server start:prod",
+    "test": "pnpm -r --if-present test",
+    "typecheck": "pnpm -r --if-present typecheck",
+    "verify": "pnpm typecheck && pnpm test && pnpm build",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1",
+    "prettier": "^3.6.2",
+    "typescript": "~6.0.0"
+  }
+}

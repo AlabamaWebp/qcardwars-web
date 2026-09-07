@@ -1,0 +1,10 @@
+node_modules/
+dist/
+.angular/
+coverage/
+*.log
+.DS_Store
+.env
+.env.*
+!.env.example
+.opencode/NIGHT_STATUS.md
