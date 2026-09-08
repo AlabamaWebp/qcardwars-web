@@ -1,4 +1,4 @@
-import { Component, computed, inject, signal } from '@angular/core';
+import { Component, computed, effect, inject, signal } from '@angular/core';
 import { getCard, HandCard, LaneState, PlayerId } from '@qcw/game-core';
 import { CardComponent } from './card.component';
 import { GameClientService } from './game-client.service';
@@ -45,7 +45,7 @@ import { GameClientService } from './game-client.service';
               <div class="divider"></div>
               <div class="slot own">
                 @if (side(lane, g.selfPlayerId).unit; as unit) {
-                  <button class="unit" (click)="special(lane.index, $event)">
+                  <button class="unit" (click)="ownUnitClick(lane.index, $event)">
                     <b>{{ cardName(unit.cardId) }}</b><span>ATK {{ unit.attack }} · HP {{ unit.health }}/{{ unit.maxHealth }}</span>
                     @if (specialLabel(unit.cardId); as label) { <small>{{ label }} · survived {{ unit.turnsSurvived }}</small> }
                   </button>
@@ -70,7 +70,7 @@ import { GameClientService } from './game-client.service';
             <qcw-card
               [card]="card"
               [selected]="selectedCard()?.uid === card.uid"
-              [disabled]="!client.isMyTurn() || getDef(card).cost > self().mana"
+              [disabled]="!client.isMyTurn() || getDef(card.cardId).cost > self().mana"
               (picked)="pickCard($event)"
             />
           }
@@ -79,7 +79,7 @@ import { GameClientService } from './game-client.service';
         <section class="footer-grid">
           <div class="hint">
             @if (selectedCard()) {
-              Selected <b>{{ getDef(selectedCard()!).name }}</b>. Click a lane/target to play. Click the card again to cancel.
+               Selected <b>{{ getDef(selectedCard()!.cardId).name }}</b>. Click a lane/target to play. Click the card again to cancel.
             } @else {
               Select a card, or click one of your surviving units to attempt its special.
             }
@@ -95,8 +95,17 @@ import { GameClientService } from './game-client.service';
             <section class="modal">
               <div class="eyebrow">match complete</div>
               <h2>{{ g.winnerId === g.selfPlayerId ? 'Victory' : 'Defeat' }}</h2>
-              <p>Baseline scaffold reaches the end state. P1 task: add two-player rematch handshake.</p>
-              <button (click)="client.leaveRoom()">Return to lobby</button>
+              @if (!rematchRequested()) {
+                <p>A two-player rematch handshake: both players must confirm.</p>
+              } @else {
+                <p class="waiting">Waiting for your opponent to confirm the rematch…</p>
+              }
+              <div class="modal-actions">
+                @if (!rematchRequested()) {
+                  <button class="primary" (click)="requestRematch()">Request rematch</button>
+                }
+                <button class="ghost" (click)="client.leaveRoom()">Return to lobby</button>
+              </div>
             </section>
           </div>
         }
@@ -119,12 +128,15 @@ import { GameClientService } from './game-client.service';
     .footer-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.hint,.log{background:#11151d;border:1px solid #272d38;border-radius:12px;padding:12px;font-size:12px;color:#aeb6c5}.log{display:grid;gap:4px}.error{margin-top:8px;color:#ff9da5}
     .modal-backdrop{position:fixed;inset:0;background:#000b;display:grid;place-items:center;padding:20px}.modal{background:#151a23;border:1px solid #3b4352;border-radius:18px;padding:28px;max-width:440px;text-align:center}.modal h2{font-size:48px;margin:4px}.modal p{color:#aeb6c5;line-height:1.5}.modal button{background:#d7b76c;border:0;padding:11px 18px;border-radius:9px;font-weight:800}.eyebrow{text-transform:uppercase;letter-spacing:.15em;color:#d7b76c;font-size:10px}
     @media(max-width:850px){.board{overflow-x:auto;grid-template-columns:repeat(4,180px);min-height:390px}.footer-grid{grid-template-columns:1fr}header{grid-template-columns:1fr auto}.turn{display:none}.playerbar{gap:10px}.game-shell{padding:8px}}
+    .modal-actions{display:flex;gap:10px;justify-content:center;margin-top:12px}.modal-actions .ghost{background:transparent;color:#aeb6c5;border:1px solid #3e4655;padding:11px 18px;border-radius:9px}.modal .waiting{color:#d7b76c;min-height:1.5em}
+    .primary{background:#d7b76c;color:#111;border-color:#d7b76c;border:0;padding:11px 18px;border-radius:9px;font-weight:800}
   `],
 })
 export class GameComponent {
   readonly client = inject(GameClientService);
   readonly selectedCard = signal<HandCard | null>(null);
   readonly selectedSpecialLane = signal<number | null>(null);
+  readonly rematchRequested = signal(false);
   readonly game = this.client.game;
   readonly self = computed(() => this.game()!.players[this.game()!.selfPlayerId]);
   readonly opponentId = computed<PlayerId>(() => {
@@ -132,6 +144,16 @@ export class GameComponent {
     return g.playerOrder[0] === g.selfPlayerId ? g.playerOrder[1] : g.playerOrder[0];
   });
   readonly opponent = computed(() => this.game()!.players[this.opponentId()]);
+
+  constructor() {
+    // Clear the "waiting for opponent" banner once a fresh match starts.
+    effect(() => {
+      const g = this.game();
+      if (g && g.status === 'playing' && this.rematchRequested()) {
+        this.rematchRequested.set(false);
+      }
+    });
+  }
 
   getDef = getCard;
   cardName(cardId: string) { return getCard(cardId).name; }
@@ -202,11 +224,42 @@ export class GameComponent {
     }
   }
 
+  /**
+   * Clicks on the player's own units.
+   *
+   * When a `friendly-unit` special is active, this lets the player aim the
+   * special at one of their own lanes (self by default, or a different unit
+   * by clicking another of their units). `selectTarget` only covers enemy
+   * pieces, so it can't supply a friendly target on its own.
+   */
+  ownUnitClick(laneIndex: number, event: Event) {
+    event.stopPropagation();
+    const game = this.game();
+    if (!game || !this.client.isMyTurn()) return;
+    const specialLane = this.selectedSpecialLane();
+    if (specialLane !== null) {
+      this.client.sendAction({
+        type: 'activate-special',
+        expectedRevision: game.revision,
+        laneIndex: specialLane,
+        targetLaneIndex: laneIndex,
+      });
+      this.selectedSpecialLane.set(null);
+      return;
+    }
+    this.special(laneIndex, event);
+  }
+
   endTurn() {
     const game = this.game();
     if (!game || !this.client.isMyTurn()) return;
     this.selectedCard.set(null);
     this.selectedSpecialLane.set(null);
     this.client.sendAction({ type: 'end-turn', expectedRevision: game.revision });
+  }
+
+  requestRematch() {
+    this.rematchRequested.set(true);
+    this.client.rematch();
   }
 }

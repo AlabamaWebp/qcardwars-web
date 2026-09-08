@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import {
   applyAction,
+  ClientAction,
   ClientGameView,
   createGame,
   GameAction,
@@ -21,6 +22,7 @@ export interface Room {
   code: string;
   players: RoomPlayer[];
   game: GameState | null;
+  seed?: number;
 }
 
 export interface RoomView {
@@ -33,8 +35,9 @@ export interface RoomView {
 export class GameService {
   private readonly rooms = new Map<string, Room>();
   private readonly socketToRoom = new Map<string, string>();
+  private readonly rematchRequests = new Map<string, Set<string>>();
 
-  createRoom(socketId: string, rawName: string): { room: Room; playerId: string } {
+  createRoom(socketId: string, rawName: string, seed?: number): { room: Room; playerId: string } {
     this.leaveBySocket(socketId);
     const code = this.generateRoomCode();
     const playerId = this.generatePlayerId();
@@ -42,13 +45,14 @@ export class GameService {
       code,
       players: [{ playerId, socketId, name: this.cleanName(rawName), connected: true }],
       game: null,
+      seed: seed ?? undefined,
     };
     this.rooms.set(code, room);
     this.socketToRoom.set(socketId, code);
     return { room, playerId };
   }
 
-  joinRoom(socketId: string, rawCode: string, rawName: string): { room: Room; playerId: string } {
+  joinRoom(socketId: string, rawCode: string, rawName: string, seed?: number): { room: Room; playerId: string } {
     this.leaveBySocket(socketId);
     const code = rawCode.trim().toUpperCase();
     const room = this.rooms.get(code);
@@ -57,6 +61,7 @@ export class GameService {
     if (room.game) throw new GameRuleError('GAME_ALREADY_STARTED', 'Game already started.');
 
     const playerId = this.generatePlayerId();
+    room.seed = seed ?? room.seed;
     room.players.push({ playerId, socketId, name: this.cleanName(rawName), connected: true });
     this.socketToRoom.set(socketId, code);
     this.startIfReady(room);
@@ -73,7 +78,7 @@ export class GameService {
     return room?.players.find((player) => player.socketId === socketId) ?? null;
   }
 
-  applySocketAction(socketId: string, action: Omit<GameAction, 'playerId'>): Room {
+  applySocketAction(socketId: string, action: ClientAction): Room {
     const room = this.requireRoom(socketId);
     const player = this.requirePlayer(room, socketId);
     if (!room.game) throw new GameRuleError('GAME_NOT_STARTED', 'Waiting for opponent.');
@@ -117,6 +122,38 @@ export class GameService {
     return room.game ? toClientView(room.game, playerId) : null;
   }
 
+  /**
+   * Rematch handshake: each player calls once. The first player to request waits for
+   * the second; once both have confirmed, a fresh deterministic game starts with the
+   * same two players and the same seed.
+   */
+  rematch(socketId: string): Room {
+    const room = this.requireRoom(socketId);
+    const player = this.requirePlayer(room, socketId);
+    if (!room.game || room.game.status !== 'finished') {
+      throw new GameRuleError('INVALID_STATE', 'There is no finished match to rematch.');
+    }
+
+    const requests = this.rematchRequests.get(room.code) ?? new Set<string>();
+    requests.add(player.playerId);
+    this.rematchRequests.set(room.code, requests);
+
+    if (requests.size < 2) return room;
+
+    const [a, b] = room.players;
+    if (!a || !b) throw new GameRuleError('INVALID_STATE', 'Rematch requires two active players.');
+    room.game = createGame({
+      roomCode: room.code,
+      players: [
+        { id: a.playerId, name: a.name },
+        { id: b.playerId, name: b.name },
+      ],
+      seed: room.seed,
+    });
+    this.rematchRequests.delete(room.code);
+    return room;
+  }
+
   private startIfReady(room: Room): void {
     if (room.players.length !== 2 || room.game) return;
     room.game = createGame({
@@ -125,6 +162,7 @@ export class GameService {
         { id: room.players[0].playerId, name: room.players[0].name },
         { id: room.players[1].playerId, name: room.players[1].name },
       ],
+      seed: room.seed,
     });
   }
 

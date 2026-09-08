@@ -7,20 +7,22 @@ import {
   WebSocketGateway,
   WebSocketServer,
 } from '@nestjs/websockets';
-import { GameAction, GameRuleError } from '@qcw/game-core';
+import { ClientAction, GameRuleError } from '@qcw/game-core';
 import { Server, Socket } from 'socket.io';
 import { GameService, Room } from './game.service';
 
 interface RoomCreatePayload {
   name: string;
+  seed?: number;
 }
 
 interface RoomJoinPayload {
   code: string;
   name: string;
+  seed?: number;
 }
 
-type ClientGameAction = Omit<GameAction, 'playerId'>;
+type ClientGameAction = ClientAction;
 
 @WebSocketGateway({ cors: { origin: true, credentials: true } })
 export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
@@ -41,7 +43,7 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
   @SubscribeMessage('room:create')
   createRoom(@ConnectedSocket() client: Socket, @MessageBody() payload: RoomCreatePayload) {
     return this.guard(client, () => {
-      const { room, playerId } = this.games.createRoom(client.id, payload?.name);
+      const { room, playerId } = this.games.createRoom(client.id, payload?.name, payload?.seed);
       client.join(room.code);
       client.emit('session:identity', { playerId, roomCode: room.code });
       this.broadcastRoom(room);
@@ -52,7 +54,7 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
   @SubscribeMessage('room:join')
   joinRoom(@ConnectedSocket() client: Socket, @MessageBody() payload: RoomJoinPayload) {
     return this.guard(client, () => {
-      const { room, playerId } = this.games.joinRoom(client.id, payload?.code, payload?.name);
+      const { room, playerId } = this.games.joinRoom(client.id, payload?.code, payload?.name, payload?.seed);
       client.join(room.code);
       client.emit('session:identity', { playerId, roomCode: room.code });
       this.broadcastRoom(room);
@@ -81,6 +83,15 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
         this.broadcastRoom(room);
       }
       client.emit('session:cleared');
+      return { ok: true };
+    });
+  }
+
+  @SubscribeMessage('room:rematch')
+  rematch(@ConnectedSocket() client: Socket) {
+    return this.guard(client, () => {
+      const room = this.games.rematch(client.id);
+      this.broadcastRoom(room);
       return { ok: true };
     });
   }

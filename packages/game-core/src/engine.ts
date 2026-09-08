@@ -306,6 +306,7 @@ function handleSpecial(state: GameState, action: Extract<GameAction, { type: 'ac
   if (player.mana < card.special.cost) fail('INSUFFICIENT_MANA', 'Not enough mana for special.');
 
   // Resolve target before spending resources so invalid targets are atomic failures.
+  // 'none' and 'enemy-hero' specials need no unit resolution (e.g. draw, hero damage).
   if (card.special.target === 'self') targetUnit(state, action.playerId, 'self', action.laneIndex);
   if (card.special.target === 'friendly-unit') {
     targetUnit(state, action.playerId, 'friendly-unit', action.laneIndex, action.targetLaneIndex);

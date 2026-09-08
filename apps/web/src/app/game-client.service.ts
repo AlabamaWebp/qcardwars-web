@@ -1,5 +1,5 @@
 import { Injectable, computed, signal } from '@angular/core';
-import { ClientGameView, GameAction } from '@qcw/game-core';
+import { ClientAction, ClientGameView } from '@qcw/game-core';
 import { io, Socket } from 'socket.io-client';
 
 export interface RoomView {
@@ -54,7 +54,7 @@ export class GameClientService {
     this.socket.emit('room:join', { code, name });
   }
 
-  sendAction(action: Omit<GameAction, 'playerId'>) {
+  sendAction(action: ClientAction) {
     this.error.set(null);
     this.socket.emit('game:action', action);
   }
@@ -62,6 +62,11 @@ export class GameClientService {
   leaveRoom() {
     this.socket.emit('room:leave');
     this.resetLocalSession();
+  }
+
+  rematch() {
+    this.error.set(null);
+    this.socket.emit('room:rematch');
   }
 
   clearError() {

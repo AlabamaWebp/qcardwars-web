@@ -33,7 +33,7 @@ export interface SpecialDefinition {
   description: string;
   cost: number;
   uses: number;
-  target: 'self' | 'friendly-unit' | 'enemy-unit' | 'enemy-hero';
+  target: 'self' | 'friendly-unit' | 'enemy-unit' | 'enemy-hero' | 'none';
   effects: readonly Effect[];
   destroySelfAfter?: boolean;
 }
@@ -167,6 +167,26 @@ export type GameAction =
   | {
       type: 'end-turn';
       playerId: PlayerId;
+      expectedRevision: number;
+    };
+
+/** Client-submitted intents. Mirrors {@link GameAction} minus the server-assigned `playerId`. */
+export type ClientAction =
+  | {
+      type: 'play-card';
+      expectedRevision: number;
+      handCardUid: string;
+      laneIndex?: number;
+      targetLaneIndex?: number;
+    }
+  | {
+      type: 'activate-special';
+      expectedRevision: number;
+      laneIndex: number;
+      targetLaneIndex?: number;
+    }
+  | {
+      type: 'end-turn';
       expectedRevision: number;
     };
 

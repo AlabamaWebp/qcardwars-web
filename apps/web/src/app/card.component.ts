@@ -11,7 +11,7 @@ import { getCard, HandCard } from '@qcw/game-core';
       <strong>{{ def().name }}</strong>
       <small>{{ def().faction }} · tier {{ def().tier }}</small>
       @if (def().kind === 'unit') {
-        <div class="stats"><span>ATK {{ def().attack }}</span><span>HP {{ def().health }}</span></div>
+        <div class="stats"><span>ATK {{ unitAtk }}</span><span>HP {{ unitHp }}</span></div>
       }
       <p>{{ def().description }}</p>
     </button>
@@ -34,4 +34,12 @@ export class CardComponent {
   readonly disabled = input(false);
   readonly picked = output<HandCard>();
   readonly def = () => getCard(this.card().cardId);
+  get unitAtk(): number {
+    const def = this.def();
+    return def.kind === 'unit' ? def.attack : 0;
+  }
+  get unitHp(): number {
+    const def = this.def();
+    return def.kind === 'unit' ? def.health : 0;
+  }
 }
