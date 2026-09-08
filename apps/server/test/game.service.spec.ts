@@ -44,4 +44,20 @@ describe('GameService rooms', () => {
     expect(after.game!.players).toHaveProperty(created.playerId);
     expect(after.game!.players).toHaveProperty(service.playerForSocket('s2')!.playerId);
   });
+
+  it('rejects a rematch when the opponent is disconnected (no solo game)', () => {
+    const service = new GameService();
+    const created = service.createRoom('s1', 'Alice');
+    service.joinRoom('s2', created.room.code, 'Bob');
+    const bob = service.playerForSocket('s2')!;
+    const room = service.roomForSocket('s1')!;
+    // Simulate a finished match, then Bob's socket leaving ("Return to lobby").
+    room.game!.status = 'finished';
+    service.leaveBySocket('s2');
+    expect(bob.connected).toBe(false);
+
+    // Alice requesting a rematch now fails cleanly instead of playing solo.
+    expect(() => service.rematch('s1')).toThrowError(/not connected/i);
+    expect(service.roomForSocket('s1')!.game!.status).toBe('finished');
+  });
 });

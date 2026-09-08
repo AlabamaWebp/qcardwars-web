@@ -101,6 +101,65 @@ describe('game-core baseline', () => {
       expect(CARD_CATALOG.some((card) => card.faction === faction)).toBe(true);
     }
   });
+
+  it('stops combat after a hero-killing hit (no overkill onto later lanes)', () => {
+    let state = game();
+    state.activePlayerId = 'p1';
+    state.players.p1.mana = 10;
+    state.players.p1.maxMana = 10;
+    const attacker = (atk: number) =>
+      ({
+        uid: 'u',
+        cardId: 'rebel-scout',
+        ownerId: 'p1',
+        attack: atk,
+        health: atk,
+        maxHealth: atk,
+        turnsSurvived: 1,
+        specialUsesRemaining: 0,
+      } as const);
+    // Lane 0 is open and lethal → kills the hero on the first lane.
+    state.lanes[0].sides.p1.unit = attacker(9);
+    // Lane 1 has a defender that must NOT get to be attacked (hero already dead).
+    state.lanes[1].sides.p1.unit = attacker(5);
+    state.lanes[1].sides.p2.unit = {
+      uid: 'd',
+      cardId: 'rebel-scout',
+      ownerId: 'p2',
+      attack: 1,
+      health: 3,
+      maxHealth: 3,
+      turnsSurvived: 1,
+      specialUsesRemaining: 0,
+    };
+    state.players.p2.hp = 2; // a single open-lane hit is fatal
+    state = endTurn(state, 'p1');
+    expect(state.status).toBe('finished');
+    const defender = state.lanes[1].sides.p2.unit;
+    expect(defender).not.toBeNull();
+    expect(defender!.health).toBe(3); // untouched — combat halted after hero death
+  });
+
+  it('hides the opponent current mana, revealing only their maximum', () => {
+    const state = game();
+    state.players.p1.mana = 3; // p1 spent some mana this turn
+    const view = toClientView(state, 'p1');
+    // Own current mana stays visible (needed to play cards).
+    expect(view.players.p1.mana).toBe(3);
+    // Opponent only reveals mana maximums, never current mana.
+    expect(view.players.p2.mana).toBe(view.players.p2.maxMana);
+  });
+
+  it('hides the opponent current HP, revealing only their maximum', () => {
+    const state = game();
+    state.players.p1.hp = 21; // p1 took 9 damage this turn
+    expect(state.config.startingHp).toBe(30);
+    const view = toClientView(state, 'p1');
+    // Own current HP stays visible.
+    expect(view.players.p1.hp).toBe(21);
+    // Opponent only reveals HP maximum (startingHp), never current HP.
+    expect(view.players.p2.hp).toBe(state.config.startingHp);
+  });
 });
 
 // =============================================================================

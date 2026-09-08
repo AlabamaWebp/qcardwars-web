@@ -456,8 +456,14 @@ export function toClientView(state: GameState, viewerId: PlayerId): ClientGameVi
     players[id] = {
       id,
       name: player.name,
-      hp: player.hp,
-      mana: player.mana,
+      // SPEC "Visibility": a player sees the opponent's HP *maximum* only.
+      // They keep their own current HP but never learn the opponent's current HP
+      // (max HP is constant per game = config.startingHp).
+      hp: id === viewerId ? player.hp : state.config.startingHp,
+      // SPEC "Visibility": a player sees the opponent's mana *maximum* only.
+      // They keep their own current mana (needed to play) but never learn the
+      // opponent's current mana.
+      mana: id === viewerId ? player.mana : player.maxMana,
       maxMana: player.maxMana,
       hand: id === viewerId ? clone(player.hand) : null,
       handCount: player.hand.length,

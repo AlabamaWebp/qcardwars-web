@@ -96,6 +96,9 @@ export class GameService {
 
     player.connected = false;
     if (room.game) room.game = setPlayerConnected(room.game, player.playerId, false);
+    // Drop any pending rematch handshake so a lone requester can't leave a
+    // dangling entry that would later wedge the room.
+    this.rematchRequests.delete(room.code);
 
     // Scaffold behavior: before a game starts, remove the player immediately.
     // P1 task: preserve/rejoin active rooms with a grace token and cleanup timeout.
@@ -132,6 +135,13 @@ export class GameService {
     const player = this.requirePlayer(room, socketId);
     if (!room.game || room.game.status !== 'finished') {
       throw new GameRuleError('INVALID_STATE', 'There is no finished match to rematch.');
+    }
+
+    // Never strand the requester in a game with no connected opponent. If a
+    // player left ("Return to lobby") their socket is gone and `connected` is
+    // false; a rematch would otherwise create a game only one player sees.
+    if (!room.players.every((p) => p.connected)) {
+      throw new GameRuleError('NOT_CONNECTED', 'Your opponent is not connected. Rematch not available.');
     }
 
     const requests = this.rematchRequests.get(room.code) ?? new Set<string>();
