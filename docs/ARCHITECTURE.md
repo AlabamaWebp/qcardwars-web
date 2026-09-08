@@ -75,3 +75,22 @@ Highest ROI order:
 4. optional Playwright two-page e2e if time remains.
 
 UI unit-test breadth is lower priority than an actual two-client match smoke test.
+
+## Gotchas / non-obvious invariants
+
+These bite fresh edits. Keep them green.
+
+- **Engine is pure/immutable.** Every resolver returns a new state; the caller must assign it
+  (`room.game = applyAction(room.game, action)`). Throwing away the return loses the whole turn.
+- **Exact two-player game.** `createGame` builds a 2-player game and a room only auto-starts with exactly two
+  connected players. No 3+ player support by design.
+- **One revision per mutation.** `revision` increments exactly once per canonical game mutation; the client must echo
+  the latest revision or the intent is rejected as stale.
+- **Sanitized views.** `toClientView` gives each player their own HP/mana/hand and the opponent only max HP
+  (`config.startingHp`) + max mana + counts; opponent hand is `null`. This is per `SPEC.md` Visibility.
+- **Rematch requires both connected.** `rematch` throws `NOT_CONNECTED` if any player is disconnected, so a departed
+  socket can never be revived into a solo game.
+- **Deterministic by seed.** Tests/smoke use seed `20240517`; the 2-client smoke binds an ephemeral port with the
+  Socket.IO adapter and asserts lock-step to a shared victory.
+- **Draw fallback.** `drawOne` returns a `'bucket'` placeholder when a deck is empty (no fatigue).
+- **Hero damage.** Only `enemy-hero` powers/damage specials harm heroes; units attack units only.

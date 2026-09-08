@@ -52,20 +52,30 @@ After a successful build, Nest serves the Angular build and Socket.IO from `http
 - `.opencode/command/night-build.md` — optional `/night-build` command
 - `START_PROMPT.md` — prompt for the orchestrator
 
-## Current scaffold status
+## Status
 
-The scaffold already contains:
+The project is feature-complete against `docs/ACCEPTANCE.md`: all P0 and P1 items pass and `pnpm verify` is green,
+including the automated two-client socket smoke test (a full deterministic match reaching a shared victory). The
+live per-session ledger — completed acceptance IDs, exact run instructions, and known deviations — is kept in
+`.opencode/NIGHT_STATUS.md`.
 
-- deterministic baseline engine;
-- four mirrored typed lanes;
-- deck/hand/mana/HP state;
-- units, buildings, powers and specials;
-- a small original-placeholder card set;
-- room create/join and two-player Socket.IO flow;
-- public/private game-state filtering;
-- initial Angular lobby and board;
-- core unit tests;
-- project-specific autonomous agent instructions.
+## Conventions & gotchas (read before editing)
 
-It is deliberately a **starting implementation**, not the finished game. See `docs/NIGHT_PLAN.md` and
-`docs/ACCEPTANCE.md` for the required overnight completion work.
+- **Server authoritative.** Clients submit intents only; the server computes legal moves, damage, mana, draws and
+  victory. Never re-implement rule legality on the client.
+- **Engine is pure/immutable.** `applyAction`, `playCard`, `endTurn`, `activateSpecial`, etc. return a **new**
+  `GameState`. Callers **must** assign the return value (`room.game = applyAction(room.game, action)`). Discarding it
+  silently loses the whole turn.
+- **Exact two-player game.** `createGame` builds a 2-player game; a room only auto-starts with exactly two connected
+  players. 3+ player support is intentionally out of scope.
+- **Deterministic by seed.** Tests and the smoke test use seed `20240517` for a fully reproducible match; the
+  two-client smoke binds an ephemeral port with the Socket.IO adapter and asserts lock-step to a shared victory.
+- **One revision per mutation.** `revision` increments exactly once per canonical game mutation; the client must echo
+  the latest revision or its intent is rejected as stale.
+- **Sanitized views.** Each player sees their own current HP/mana and full hand; the opponent sees only max HP
+  (`config.startingHp` = 30) and max mana, plus counts, and a `null` hand (see `SPEC.md` Visibility + `engine.toClientView`).
+- **Rematch requires both connected.** `rematch` throws `NOT_CONNECTED` when any player is disconnected, so a departed
+  socket can never be revived into a solo game.
+- **Draw fallback.** `drawOne` returns a `'bucket'` placeholder when a deck is empty (no fatigue damage).
+- **Hero damage sources.** Only `enemy-hero` powers/damage specials harm heroes; units attack units only.
+
