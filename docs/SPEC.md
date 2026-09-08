@@ -91,6 +91,10 @@ A player may see:
 
 The server must produce a per-player sanitized view.
 
+Enforcement (`engine.toClientView`): each player sees their own current HP/mana; the opponent's HP is shown only as
+`config.startingHp` (maximum) and their mana only as `maxMana`; the opponent's hand is `null` (card identities hidden),
+while hand and deck counts are still shown. Showing the opponent's *current* HP/mana is not claimed as original.
+
 ## Networking/revision rules
 
 - Every canonical game mutation increments `revision` exactly once.
@@ -106,6 +110,8 @@ The server must produce a per-player sanitized view.
 - Auto-start when exactly two connected players are present.
 - Disconnect marks player disconnected; keep room for a short grace period (P1). Rejoin token support is P1.
 - At game over both players can request rematch; when both accept, create a fresh seeded match with same players.
+- Baseline: a rematch is rejected while the opponent's socket is disconnected (e.g. they "Return to lobby"), so a
+  single connected player can never start a solo game. Both players must be connected to accept.
 - Either player can leave back to lobby.
 
 ## Content target for overnight build
