@@ -32,11 +32,12 @@ import { GameClientService } from './game-client.service';
             <div>Room <strong>{{ client.room()!.code }}</strong></div>
             <p>Share the code with player 2. Match starts automatically.</p>
             @for (player of client.room()!.players; track player.id) {
-              <div class="player">{{ player.name }} <span>{{ player.connected ? 'ready' : 'offline' }}</span></div>
+              <div class="player">{{ player.name }} <span [class.offline]="!player.connected">{{ player.connected ? 'ready' : 'disconnected — waiting to rejoin…' }}</span></div>
             }
             <button (click)="client.leaveRoom()">Leave room</button>
           </div>
         }
+        @if (client.reconnected()) { <div class="notice">Reconnected — session restored.</div> }
         @if (client.error()) { <div class="error">{{ client.error()!.message }}</div> }
       </section>
     </main>
@@ -57,8 +58,10 @@ import { GameClientService } from './game-client.service';
     .join-row { display:grid; grid-template-columns:1fr auto; gap:10px; }
     .code { text-transform:uppercase; letter-spacing:.12em; font-weight:800; }
     .room { display:grid; gap:10px; } .room strong { font-size:22px; letter-spacing:.12em; }
-    .player { display:flex; justify-content:space-between; background:#0c1016; border-radius:8px; padding:10px 12px; }
+    .player { display:flex; justify-content:space-between; gap:10px; background:#0c1016; border-radius:8px; padding:10px 12px; }
     .player span { color:#76cf8b; font-size:12px; }
+    .player span.offline { color:#d26f73; }
+    .notice { background:#12291c; border:1px solid #2f5c3d; color:#7ad78d; padding:10px 12px; border-radius:9px; }
     .error { background:#3a1719; border:1px solid #6d2d32; color:#ffb7bd; padding:10px 12px; border-radius:9px; }
     @media(max-width:640px){ .hero{align-items:flex-start; flex-direction:column;} .join-row{grid-template-columns:1fr;} }
   `],

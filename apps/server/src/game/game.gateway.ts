@@ -22,6 +22,19 @@ interface RoomJoinPayload {
   seed?: number;
 }
 
+interface RoomRejoinPayload {
+  code: string;
+  token: string;
+  /** Seat id from the stored session; lets the server recover superseded tokens. */
+  playerId?: string;
+}
+
+interface SessionIdentity {
+  playerId: string;
+  roomCode: string;
+  token: string;
+}
+
 type ClientGameAction = ClientAction;
 
 @WebSocketGateway({ cors: { origin: true, credentials: true } })
@@ -29,23 +42,27 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
   @WebSocketServer()
   server: Server;
 
-  constructor(private readonly games: GameService) {}
+  constructor(private readonly games: GameService) {
+    // Grace-window expiry (seat removal / auto-forfeit) happens on a timer
+    // inside the service; re-broadcast so remaining clients see the outcome.
+    this.games.onRoomChanged((room) => this.broadcastRoom(room));
+  }
 
   handleConnection(client: Socket) {
     client.emit('connection:ready', { socketId: client.id });
   }
 
   handleDisconnect(client: Socket) {
-    const room = this.games.leaveBySocket(client.id);
+    const room = this.games.disconnectBySocket(client.id);
     if (room) this.broadcastRoom(room);
   }
 
   @SubscribeMessage('room:create')
   createRoom(@ConnectedSocket() client: Socket, @MessageBody() payload: RoomCreatePayload) {
     return this.guard(client, () => {
-      const { room, playerId } = this.games.createRoom(client.id, payload?.name, payload?.seed);
+      const { room, playerId, token } = this.games.createRoom(client.id, payload?.name, payload?.seed);
       client.join(room.code);
-      client.emit('session:identity', { playerId, roomCode: room.code });
+      client.emit('session:identity', { playerId, roomCode: room.code, token });
       this.broadcastRoom(room);
       return { ok: true, code: room.code };
     });
@@ -54,9 +71,29 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
   @SubscribeMessage('room:join')
   joinRoom(@ConnectedSocket() client: Socket, @MessageBody() payload: RoomJoinPayload) {
     return this.guard(client, () => {
-      const { room, playerId } = this.games.joinRoom(client.id, payload?.code, payload?.name, payload?.seed);
+      const { room, playerId, token } = this.games.joinRoom(client.id, payload?.code, payload?.name, payload?.seed);
       client.join(room.code);
-      client.emit('session:identity', { playerId, roomCode: room.code });
+      client.emit('session:identity', { playerId, roomCode: room.code, token });
+      this.broadcastRoom(room);
+      return { ok: true, code: room.code };
+    });
+  }
+
+  @SubscribeMessage('room:rejoin')
+  rejoin(@ConnectedSocket() client: Socket, @MessageBody() payload: RoomRejoinPayload) {
+    return this.guard(client, () => {
+      const { room, player, token } = this.games.rejoin(
+        client.id,
+        payload?.code ?? '',
+        payload?.token ?? '',
+        payload?.playerId,
+      );
+      client.join(room.code);
+      client.emit('session:identity', { playerId: player.playerId, roomCode: room.code, token });
+      client.emit('room:state', this.games.roomView(room));
+      const gameView = this.games.gameView(room, player.playerId);
+      if (gameView) client.emit('game:state', gameView);
+      // Let the remaining players see the opponent back online.
       this.broadcastRoom(room);
       return { ok: true, code: room.code };
     });

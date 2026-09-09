@@ -1,5 +1,20 @@
 import { describe, expect, it } from 'vitest';
-import { GameService } from '../src/game/game.service';
+import { GameRuleError } from '@qcw/game-core';
+import { DEFAULT_REJOIN_GRACE_MS, GameService, Room } from '../src/game/game.service';
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function ruleErrorOf(fn: () => unknown): GameRuleError {
+  try {
+    fn();
+  } catch (error) {
+    expect(error).toBeInstanceOf(GameRuleError);
+    return error as GameRuleError;
+  }
+  throw new Error('Expected the operation to throw a GameRuleError.');
+}
 
 describe('GameService rooms', () => {
   it('creates and starts a room when the second player joins', () => {
@@ -59,5 +74,423 @@ describe('GameService rooms', () => {
     // Alice requesting a rematch now fails cleanly instead of playing solo.
     expect(() => service.rematch('s1')).toThrowError(/not connected/i);
     expect(service.roomForSocket('s1')!.game!.status).toBe('finished');
+  });
+});
+
+describe('GameService rejoin grace (P1-04)', () => {
+  it('defaults to a 120 second grace window', () => {
+    expect(DEFAULT_REJOIN_GRACE_MS).toBe(120_000);
+    expect(new GameService().rejoinGraceMs).toBe(120_000);
+  });
+
+  it('issues a single-use session token on create and join', () => {
+    const service = new GameService();
+    const created = service.createRoom('s1', 'Alice');
+    expect(created.token).toBeTruthy();
+    const joined = service.joinRoom('s2', created.room.code, 'Bob');
+    expect(joined.token).toBeTruthy();
+    expect(joined.token).not.toBe(created.token);
+  });
+
+  it('keeps the seat pre-game on disconnect, then rejoins within the grace window', () => {
+    const service = new GameService();
+    service.rejoinGraceMs = 10_000;
+    const created = service.createRoom('s1', 'Alice');
+    const joined = service.joinRoom('s2', created.room.code, 'Bob'); // starts the game
+    const room = service.roomForSocket('s2')!;
+    const bob = service.playerForSocket('s2')!;
+    const revisionBefore = room.game!.revision;
+
+    service.disconnectBySocket('s2');
+    const afterDisconnect = service.roomForSocket('s1')!;
+    expect(afterDisconnect.players).toHaveLength(2);
+    expect(afterDisconnect.players.find((p) => p.playerId === bob.playerId)!.connected).toBe(false);
+    expect(service.gameView(afterDisconnect, created.playerId)!.players[bob.playerId].connected).toBe(false);
+
+    // A fresh socket for the same seat rejoins with the token.
+    const result = service.rejoin('s3', created.room.code, joined.token);
+    expect(result.player.playerId).toBe(bob.playerId);
+    const after = service.roomForSocket('s3')!;
+    const seat = after.players.find((p) => p.playerId === bob.playerId)!;
+    expect(seat.connected).toBe(true);
+    expect(seat.socketId).toBe('s3');
+    // Same game, same revision lineage (one bump per connect/disconnect flip).
+    expect(after.game).not.toBeNull();
+    expect(after.game!.revision).toBe(revisionBefore + 2);
+    expect(service.gameView(after, bob.playerId)!.players[bob.playerId].connected).toBe(true);
+    // The token was consumed: replaying it fails, and a fresh token was issued.
+    expect(result.token).not.toBe(joined.token);
+    expect(ruleErrorOf(() => service.rejoin('s4', created.room.code, joined.token)).code).toBe('REJOIN_INVALID');
+  });
+
+  it('rejects an invalid rejoin token', () => {
+    const service = new GameService();
+    service.rejoinGraceMs = 10_000;
+    const created = service.createRoom('s1', 'Alice');
+    service.joinRoom('s2', created.room.code, 'Bob');
+    service.disconnectBySocket('s2');
+    expect(ruleErrorOf(() => service.rejoin('s9', created.room.code, 'not-a-token')).code).toBe('REJOIN_INVALID');
+    // Seat is untouched by the failed attempt.
+    expect(service.roomForSocket('s1')!.players).toHaveLength(2);
+  });
+
+  it('supports a second rejoin cycle (in-game reload, then tab close and reopen)', () => {
+    const service = new GameService();
+    service.rejoinGraceMs = 10_000;
+    const created = service.createRoom('s1', 'Alice');
+    const joined = service.joinRoom('s2', created.room.code, 'Bob'); // starts the game
+    const bobId = joined.playerId;
+
+    // Cycle 1: a reload — the old socket disconnects, a fresh socket rejoins.
+    service.disconnectBySocket('s2');
+    const first = service.rejoin('s3', created.room.code, joined.token, bobId);
+    expect(first.player.playerId).toBe(bobId);
+
+    // Cycle 2: the tab closes and a brand-new page rejoins with the rotated token.
+    service.disconnectBySocket('s3');
+    const second = service.rejoin('s4', created.room.code, first.token, first.player.playerId);
+    expect(second.player.playerId).toBe(bobId);
+    const seat = second.room.players.find((p) => p.playerId === bobId)!;
+    expect(seat.connected).toBe(true);
+    expect(seat.socketId).toBe('s4');
+    expect(second.room.game!.players[bobId].connected).toBe(true);
+  });
+
+  it('recovers a superseded (stale) token via the seat fallback', () => {
+    const service = new GameService();
+    service.rejoinGraceMs = 10_000;
+    const created = service.createRoom('s1', 'Alice');
+    const joined = service.joinRoom('s2', created.room.code, 'Bob');
+    const bobId = joined.playerId;
+    const tokenA = joined.token;
+
+    // A faster rejoin from the same seat rotates the token away from A...
+    service.disconnectBySocket('s2');
+    const fast = service.rejoin('s3', created.room.code, tokenA, bobId);
+    // ...and the seat disconnects again, arming the rotated token.
+    service.disconnectBySocket('s3');
+
+    // The slow client still stores stale token A. The fallback reclaims the
+    // (disconnected) seat by playerId instead of stranding it.
+    const slow = service.rejoin('s4', created.room.code, tokenA, bobId);
+    expect(slow.player.playerId).toBe(bobId);
+    expect(slow.room.players.find((p) => p.playerId === bobId)!.socketId).toBe('s4');
+    expect(slow.token).not.toBe(fast.token);
+  });
+
+  it('never lets a stale token hijack a connected seat', () => {
+    const service = new GameService();
+    service.rejoinGraceMs = 10_000;
+    const created = service.createRoom('s1', 'Alice');
+    const joined = service.joinRoom('s2', created.room.code, 'Bob');
+    const bobId = joined.playerId;
+
+    // Rotate token A while the seat ends up connected on s3.
+    service.disconnectBySocket('s2');
+    service.rejoin('s3', created.room.code, joined.token, bobId);
+
+    // A stale client holding token A cannot claim the live seat.
+    expect(ruleErrorOf(() => service.rejoin('s9', created.room.code, joined.token, bobId)).code).toBe('REJOIN_INVALID');
+    expect(service.roomForSocket('s3')!.players.find((p) => p.playerId === bobId)!.socketId).toBe('s3');
+  });
+
+  it('still reports REJOIN_EXPIRED after the window lapses, even with the seat id', async () => {
+    const service = new GameService();
+    service.rejoinGraceMs = 20;
+    const created = service.createRoom('s1', 'Alice');
+    const joined = service.joinRoom('s2', created.room.code, 'Bob');
+    service.disconnectBySocket('s2');
+    await sleep(80);
+    expect(ruleErrorOf(() => service.rejoin('s3', created.room.code, joined.token, joined.playerId)).code).toBe(
+      'REJOIN_EXPIRED',
+    );
+  });
+
+  it('pre-game: grace expiry removes the seat and deletes an empty room', async () => {
+    const service = new GameService();
+    service.rejoinGraceMs = 500;
+    const created = service.createRoom('s1', 'Alice');
+
+    // Seat is preserved immediately after the disconnect: a rejoin within the
+    // window succeeds and still shows the solo seat.
+    service.disconnectBySocket('s1');
+    const rejoined = service.rejoin('s1b', created.room.code, created.token);
+    expect(rejoined.room.players).toHaveLength(1);
+    expect(rejoined.room.game).toBeNull();
+
+    // After the grace window elapses the (empty) room is deleted.
+    service.disconnectBySocket('s1b');
+    await sleep(800);
+    expect(() => service.joinRoom('s2', created.room.code, 'Bob')).toThrowError(/room not found/i);
+    // The seat is gone, so its session records are cleared too: the old token
+    // now resolves to nothing at all (generic invalid, not expired).
+    expect(ruleErrorOf(() => service.rejoin('s3', created.room.code, rejoined.token)).code).toBe('REJOIN_INVALID');
+  });
+
+  it('pre-game: grace expiry clears the seat session records (no sessions/tokenIndex leak)', async () => {
+    const service = new GameService();
+    service.rejoinGraceMs = 20;
+    const created = service.createRoom('s1', 'Alice');
+    const seatKey = `${created.room.code}:${created.playerId}`;
+    const internals = service as unknown as { sessions: Map<string, unknown>; tokenIndex: Map<string, string> };
+
+    service.disconnectBySocket('s1');
+    await sleep(80);
+
+    expect(internals.sessions.get(seatKey)).toBeUndefined();
+    expect(internals.tokenIndex.get(created.token)).toBeUndefined();
+  });
+
+  it('rejects a rejoin after the grace window with REJOIN_EXPIRED', async () => {
+    const service = new GameService();
+    service.rejoinGraceMs = 20;
+    const created = service.createRoom('s1', 'Alice');
+    const joined = service.joinRoom('s2', created.room.code, 'Bob');
+    service.disconnectBySocket('s2');
+    await sleep(80);
+    expect(ruleErrorOf(() => service.rejoin('s3', created.room.code, joined.token)).code).toBe('REJOIN_EXPIRED');
+  });
+
+  it('in-game: grace expiry auto-forfeits to the remaining connected player', async () => {
+    const service = new GameService();
+    service.rejoinGraceMs = 20;
+    const created = service.createRoom('s1', 'Alice');
+    service.joinRoom('s2', created.room.code, 'Bob');
+    let broadcast = 0;
+    service.onRoomChanged(() => {
+      broadcast += 1;
+    });
+
+    service.disconnectBySocket('s2');
+    await sleep(80);
+
+    const room = service.roomForSocket('s1')!;
+    expect(room.game!.status).toBe('finished');
+    expect(room.game!.winnerId).toBe(created.playerId);
+    expect(
+      room.game!.log.some((entry) => /forfeited \(opponent did not rejoin\)/.test(entry.text)),
+    ).toBe(true);
+    // The remaining player is notified via the room-changed listener.
+    expect(broadcast).toBe(1);
+  });
+
+  it('explicit leave cancels the rejoin session (no late rejoin)', async () => {
+    const service = new GameService();
+    service.rejoinGraceMs = 20;
+    const created = service.createRoom('s1', 'Alice');
+    service.joinRoom('s2', created.room.code, 'Bob');
+    service.leaveBySocket('s2');
+    await sleep(80);
+    expect(ruleErrorOf(() => service.rejoin('s3', created.room.code, 'whatever')).code).toBe('REJOIN_INVALID');
+  });
+
+  it('in-game explicit leave forfeits the match to the remaining connected player', () => {
+    const service = new GameService();
+    const created = service.createRoom('s1', 'Alice');
+    service.joinRoom('s2', created.room.code, 'Bob');
+    let broadcast = 0;
+    service.onRoomChanged(() => {
+      broadcast += 1;
+    });
+
+    // Bob deliberately leaves mid-match: the match ends immediately — it can
+    // never sit in 'playing' against an un-rejoinable seat.
+    service.leaveBySocket('s2');
+    const room = service.roomForSocket('s1')!;
+    expect(room.game!.status).toBe('finished');
+    expect(room.game!.winnerId).toBe(created.playerId);
+    expect(room.game!.log.some((entry) => /left the match/.test(entry.text))).toBe(true);
+    // The remaining player is notified via the room-changed listener.
+    expect(broadcast).toBe(1);
+
+    // When the winner leaves too, no connected players remain: room is deleted.
+    service.leaveBySocket('s1');
+    expect(service.roomForSocket('s1')).toBeNull();
+    expect(service.roomForSocket('s2')).toBeNull();
+  });
+
+  it('in-game explicit leave with no remaining connected player deletes the room', () => {
+    const service = new GameService();
+    service.rejoinGraceMs = 10_000;
+    const created = service.createRoom('s1', 'Alice');
+    service.joinRoom('s2', created.room.code, 'Bob');
+    const internals = service as unknown as { rooms: Map<string, unknown> };
+
+    // Bob's socket drops (seat kept, grace armed), then Alice leaves explicitly.
+    service.disconnectBySocket('s2');
+    service.leaveBySocket('s1');
+
+    // Nobody connected is left: the room is deleted (no forfeit to run).
+    expect(service.roomForSocket('s1')).toBeNull();
+    expect(service.roomForSocket('s2')).toBeNull();
+    expect(internals.rooms.get(created.room.code)).toBeUndefined();
+  });
+
+  it('fallback rejoin refuses an explicitly-left in-game seat (no live grace session)', () => {
+    const service = new GameService();
+    service.rejoinGraceMs = 10_000;
+    const created = service.createRoom('s1', 'Alice');
+    service.joinRoom('s2', created.room.code, 'Bob');
+    const bob = service.playerForSocket('s2')!;
+
+    // Bob explicitly leaves mid-match: the seat is kept (finished match) but
+    // his rejoin session is cancelled, so there is no live grace to claim.
+    service.leaveBySocket('s2');
+
+    // A fresh socket holding no seat must NOT claim Bob's seat with a garbage
+    // token + his (publicly visible) playerId.
+    expect(ruleErrorOf(() => service.rejoin('s9', created.room.code, 'garbage-token', bob.playerId)).code).toBe(
+      'REJOIN_INVALID',
+    );
+    // Seat is untouched by the failed attempt.
+    const seat = service.roomForSocket('s1')!.players.find((p) => p.playerId === bob.playerId)!;
+    expect(seat.connected).toBe(false);
+    expect(seat.socketId).toBe('s2');
+  });
+
+  it('fallback rejoin refuses an expired in-game grace (retained entry is not claimable)', async () => {
+    const service = new GameService();
+    service.rejoinGraceMs = 20;
+    const created = service.createRoom('s1', 'Alice');
+    const joined = service.joinRoom('s2', created.room.code, 'Bob');
+    const bobId = joined.playerId;
+
+    // Bob's grace lapses while Alice is still connected: the match auto-
+    // forfeits and the session entry is retained (for REJOIN_EXPIRED).
+    service.disconnectBySocket('s2');
+    await sleep(80);
+    expect(ruleErrorOf(() => service.rejoin('s3', created.room.code, joined.token)).code).toBe('REJOIN_EXPIRED');
+
+    // The stale-token fallback must NOT resurrect the seat through the
+    // retained-but-expired entry.
+    expect(ruleErrorOf(() => service.rejoin('s4', created.room.code, 'stale-token', bobId)).code).toBe(
+      'REJOIN_INVALID',
+    );
+    const room = service.roomForSocket('s1')!;
+    const seat = room.players.find((p) => p.playerId === bobId)!;
+    expect(seat.connected).toBe(false);
+    expect(seat.socketId).toBe('s2');
+  });
+
+  it('in-game: both seats gone deletes the room and clears all session records (no leak)', async () => {
+    const service = new GameService();
+    service.rejoinGraceMs = 20;
+    const created = service.createRoom('s1', 'Alice');
+    const joined = service.joinRoom('s2', created.room.code, 'Bob');
+    const code = created.room.code;
+    const internals = service as unknown as {
+      rooms: Map<string, unknown>;
+      sessions: Map<string, unknown>;
+      tokenIndex: Map<string, string>;
+    };
+
+    // Both sockets drop mid-match and both grace windows lapse.
+    service.disconnectBySocket('s2');
+    service.disconnectBySocket('s1');
+    await sleep(80);
+
+    expect(internals.rooms.get(code)).toBeUndefined();
+    for (const key of internals.sessions.keys()) {
+      expect(key.startsWith(`${code}:`)).toBe(false);
+    }
+    expect(internals.tokenIndex.get(created.token)).toBeUndefined();
+    expect(internals.tokenIndex.get(joined.token)).toBeUndefined();
+  });
+
+  it('a connected opponent cannot claim a disconnected seat by playerId (REJOIN_INVALID)', () => {
+    const service = new GameService();
+    service.rejoinGraceMs = 10_000;
+    const created = service.createRoom('s1', 'Alice');
+    const joined = service.joinRoom('s2', created.room.code, 'Bob');
+    const bobId = joined.playerId;
+    service.disconnectBySocket('s2');
+
+    // Alice's in-room socket already holds her own seat → the stale-token
+    // fallback must refuse it, even though Bob's seat is disconnected and
+    // its playerId is (publicly) known to her.
+    expect(ruleErrorOf(() => service.rejoin('s1', created.room.code, 'bogus-token', bobId)).code).toBe(
+      'REJOIN_INVALID',
+    );
+    // Bob's seat is untouched by the failed attempt.
+    const seat = service.roomForSocket('s1')!.players.find((p) => p.playerId === bobId)!;
+    expect(seat.connected).toBe(false);
+    expect(seat.socketId).toBe('s2');
+
+    // The legitimate fallback (fresh socket holding no seat) still works.
+    const slow = service.rejoin('s3', created.room.code, 'bogus-token', bobId);
+    expect(slow.player.playerId).toBe(bobId);
+    expect(slow.room.players.find((p) => p.playerId === bobId)!.socketId).toBe('s3');
+  });
+
+  it('rejoin resolves a deferred forfeit when the other seat has no live grace', async () => {
+    const service = new GameService();
+    service.rejoinGraceMs = 100; // A's grace: [0,100), B's grace: [60,160)
+    const created = service.createRoom('s1', 'Alice');
+    const joined = service.joinRoom('s2', created.room.code, 'Bob');
+    const code = created.room.code;
+    const internals = service as unknown as { rooms: Map<string, Room> };
+    let broadcast = 0;
+    service.onRoomChanged(() => {
+      broadcast += 1;
+    });
+
+    // A disconnects at T+0, B disconnects at T+60.
+    service.disconnectBySocket('s1');
+    await sleep(60);
+    service.disconnectBySocket('s2');
+
+    // At T+100 A's grace lapses: no connected seat remains, B is still inside
+    // its live grace → forfeit deferred, room and match preserved.
+    await sleep(60);
+    expect(internals.rooms.get(code)).toBeDefined();
+    expect(internals.rooms.get(code)!.game!.status).toBe('playing');
+    expect(broadcast).toBe(0);
+
+    // At T+120 B rejoins with a valid token (still inside his own [60,160)
+    // grace). A is expired with no live grace:
+    // the deferred forfeit must resolve to B instead of stranding the match.
+    const result = service.rejoin('s3', code, joined.token);
+    expect(result.player.playerId).toBe(joined.playerId);
+    expect(result.room.game!.status).toBe('finished');
+    expect(result.room.game!.winnerId).toBe(joined.playerId);
+    expect(result.room.game!.log.some((entry) => /did not return in time/.test(entry.text))).toBe(
+      true,
+    );
+    // The rejoiner is notified via the room-changed listener, and the room
+    // state is consistent (kept, B connected on the new socket).
+    expect(broadcast).toBe(1);
+    const room = internals.rooms.get(code)!;
+    expect(room.players.find((p) => p.playerId === joined.playerId)!.connected).toBe(true);
+    expect(room.players.find((p) => p.playerId === created.playerId)!.connected).toBe(false);
+  });
+
+  it('finished-room leave clears the other seat\'s session records (no leak)', async () => {
+    const service = new GameService();
+    service.rejoinGraceMs = 20;
+    const created = service.createRoom('s1', 'Alice');
+    const joined = service.joinRoom('s2', created.room.code, 'Bob');
+    const code = created.room.code;
+    const internals = service as unknown as {
+      rooms: Map<string, unknown>;
+      sessions: Map<string, unknown>;
+      tokenIndex: Map<string, string>;
+    };
+
+    // Bob drops and his grace lapses: the match forfeits to Alice (finished).
+    service.disconnectBySocket('s2');
+    await sleep(80);
+    const room = service.roomForSocket('s1')!;
+    expect(room.game!.status).toBe('finished');
+    expect(room.game!.winnerId).toBe(created.playerId);
+
+    // The winner leaves back to the lobby: nobody connected remains, so the
+    // room is deleted AND both seats' session/token records are cleared.
+    service.leaveBySocket('s1');
+    expect(internals.rooms.get(code)).toBeUndefined();
+    for (const key of internals.sessions.keys()) {
+      expect(key.startsWith(`${code}:`)).toBe(false);
+    }
+    expect(internals.tokenIndex.get(created.token)).toBeUndefined();
+    expect(internals.tokenIndex.get(joined.token)).toBeUndefined();
   });
 });

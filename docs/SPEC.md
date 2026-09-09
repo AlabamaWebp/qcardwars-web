@@ -84,16 +84,17 @@ Do not build a general scripting language until P0/P1 acceptance is complete.
 
 A player may see:
 
-- full public board and both HP/mana maximums/current active player;
+- full public board, **both players' current HP and current mana**, and the current active player;
 - their own full hand;
 - their own exact deck count, not order;
 - opponent hand count and deck count, never card identities/order.
 
 The server must produce a per-player sanitized view.
 
-Enforcement (`engine.toClientView`): each player sees their own current HP/mana; the opponent's HP is shown only as
-`config.startingHp` (maximum) and their mana only as `maxMana`; the opponent's hand is `null` (card identities hidden),
-while hand and deck counts are still shown. Showing the opponent's *current* HP/mana is not claimed as original.
+Enforcement (`engine.toClientView`): each player sees their own current HP/mana **and the opponent's real current HP
+and real current mana** (`maxMana` is also always reported). The opponent's hand is `null` (card identities hidden),
+while hand and deck counts are still shown. Showing the opponent's current HP/mana is a web-baseline choice (a
+supersession of the earlier max-only baseline); it is not claimed as original.
 
 ## Networking/revision rules
 
@@ -108,7 +109,27 @@ while hand and deck counts are still shown. Showing the opponent's *current* HP/
 - Create room → 6-character code.
 - Join room by code.
 - Auto-start when exactly two connected players are present.
-- Disconnect marks player disconnected; keep room for a short grace period (P1). Rejoin token support is P1.
+- **Disconnect + rejoin grace (P1-04 baseline):**
+   - On create/join the server issues a single-use rejoin token for the seat and sends it to the client
+     (`session:identity`); the client persists `{ code, playerId, token }` to `localStorage` (`qcw.session`).
+     Two tabs of the same browser share that single session slot, so play two players on separate devices or
+     in private windows (documented MVP limitation).
+  - A socket disconnect (pre-game OR in-game) marks the player disconnected, **keeps the seat** (`connected: false`,
+    visible in the lobby room view), and arms the grace window for that seat.
+  - The grace window defaults to **120 seconds** and is configurable server-side (module constant / service property;
+    no env plumbing in the MVP).
+  - A client that reconnects (socket.io auto-reconnect or page reload) emits `room:rejoin { code, token }`. On
+    success the seat reattaches to the new socket, `connected` becomes true again, and the client receives the same
+    room + game views a fresh joiner gets, plus a fresh token. On failure the server emits `server:error` with
+    `REJOIN_INVALID`, `REJOIN_EXPIRED` or `ROOM_NOT_FOUND`; the client clears the stored session and shows the lobby.
+  - When the grace window elapses: pre-game → the seat is removed (the room is deleted if empty and the remaining
+    player is notified); in-game → the match **auto-forfeits** to the remaining connected player with a log entry
+    "… forfeited (opponent did not rejoin)", and the final view is broadcast.
+  - An explicit "Leave room" is not a disconnect: pre-game the seat is dropped immediately, the rejoin session is
+    cancelled, and the stored client session is cleared. **In-game, an explicit leave forfeits the match
+    immediately** to the remaining connected player (same forfeit + log + broadcast path as grace expiry) — a
+    deliberate leave can never leave the opponent stuck in a `playing` match against an un-rejoinable seat. If no
+    connected player remains after the leave, the room is deleted.
 - At game over both players can request rematch; when both accept, create a fresh seeded match with same players.
 - Baseline: a rematch is rejected while the opponent's socket is disconnected (e.g. they "Return to lobby"), so a
   single connected player can never start a solo game. Both players must be connected to accept.

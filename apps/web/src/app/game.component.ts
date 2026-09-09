@@ -16,6 +16,7 @@ import { GameClientService } from './game-client.service';
             <strong>Room {{ g.roomCode }}</strong>
           </div>
           <div class="turn" [class.mine]="client.isMyTurn()">
+            @if (client.reconnected()) { <span class="reconnected">reconnected</span> }
             {{ g.status === 'finished' ? 'MATCH OVER' : (client.isMyTurn() ? 'YOUR TURN' : 'OPPONENT TURN') }}
           </div>
           <button class="end" (click)="endTurn()" [disabled]="!client.isMyTurn()">End turn</button>
@@ -95,13 +96,15 @@ import { GameClientService } from './game-client.service';
             <section class="modal">
               <div class="eyebrow">match complete</div>
               <h2>{{ g.winnerId === g.selfPlayerId ? 'Victory' : 'Defeat' }}</h2>
-              @if (!rematchRequested()) {
+              @if (!opponent().connected) {
+                <p>Your opponent has left the match — no rematch is possible. Return to the lobby to create or join a room.</p>
+              } @else if (!rematchRequested()) {
                 <p>A two-player rematch handshake: both players must confirm.</p>
               } @else {
                 <p class="waiting">Waiting for your opponent to confirm the rematch…</p>
               }
               <div class="modal-actions">
-                @if (!rematchRequested()) {
+                @if (opponent().connected && !rematchRequested()) {
                   <button class="primary" (click)="requestRematch()">Request rematch</button>
                 }
                 <button class="ghost" (click)="client.leaveRoom()">Return to lobby</button>
@@ -116,7 +119,7 @@ import { GameClientService } from './game-client.service';
     .game-shell { min-height:100vh; padding:14px; max-width:1500px; margin:0 auto; display:grid; gap:10px; }
     header { display:grid; grid-template-columns:1fr auto 1fr; align-items:center; gap:10px; background:#11151d; border:1px solid #272d38; border-radius:14px; padding:10px 12px; }
     header>div:first-child { display:flex; align-items:center; gap:12px; } .ghost{background:transparent;color:#aeb6c5;border:0;} .end{justify-self:end;background:#d7b76c;color:#111;border:0;border-radius:9px;padding:10px 18px;font-weight:800;}
-    .turn{font-size:12px;letter-spacing:.14em;color:#d26f73;font-weight:900}.turn.mine{color:#7ad78d}
+    .turn{font-size:12px;letter-spacing:.14em;color:#d26f73;font-weight:900}.turn.mine{color:#7ad78d}.reconnected{color:#7ad78d;margin-right:8px;text-transform:lowercase;letter-spacing:.04em}
     .playerbar { display:flex; align-items:center; gap:18px; flex-wrap:wrap; padding:9px 13px; background:#11151d; border:1px solid #272d38; border-radius:12px; font-size:13px; }
     .playerbar>div:first-child { margin-right:auto; display:flex; gap:8px; align-items:baseline; }.playerbar span{font-size:10px;color:#7ad78d}.playerbar strong{font-size:18px}
     .board { display:grid; grid-template-columns:repeat(4,minmax(150px,1fr)); gap:8px; min-height:420px; }

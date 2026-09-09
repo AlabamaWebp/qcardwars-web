@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { CARD_CATALOG, createGame, applyAction, GameRuleError, toClientView } from './index';
+import {
+  CARD_CATALOG,
+  createGame,
+  applyAction,
+  forfeitGame,
+  setPlayerConnected,
+  GameRuleError,
+  toClientView,
+} from './index';
 
 function game(seed = 2) {
   return createGame({
@@ -140,25 +148,60 @@ describe('game-core baseline', () => {
     expect(defender!.health).toBe(3); // untouched — combat halted after hero death
   });
 
-  it('hides the opponent current mana, revealing only their maximum', () => {
+  it('shows the opponent real current mana (max-only baseline retired)', () => {
     const state = game();
     state.players.p1.mana = 3; // p1 spent some mana this turn
+    state.players.p2.maxMana = 5;
+    state.players.p2.mana = 2; // p2 spent 3 of 5 mana this turn
     const view = toClientView(state, 'p1');
     // Own current mana stays visible (needed to play cards).
     expect(view.players.p1.mana).toBe(3);
-    // Opponent only reveals mana maximums, never current mana.
-    expect(view.players.p2.mana).toBe(view.players.p2.maxMana);
+    // Opponent's *current* mana is visible, not just the maximum.
+    expect(view.players.p2.mana).toBe(2);
+    expect(view.players.p2.maxMana).toBe(5);
+    // Symmetric: p2 sees p1's real current mana too.
+    const view2 = toClientView(state, 'p2');
+    expect(view2.players.p1.mana).toBe(3);
   });
 
-  it('hides the opponent current HP, revealing only their maximum', () => {
+  it('shows the opponent real current HP while keeping the hand hidden', () => {
     const state = game();
-    state.players.p1.hp = 21; // p1 took 9 damage this turn
-    expect(state.config.startingHp).toBe(30);
+    state.players.p1.hp = 21; // p1 took 9 damage
+    state.players.p2.hp = 17; // p2 took 13 damage
     const view = toClientView(state, 'p1');
     // Own current HP stays visible.
     expect(view.players.p1.hp).toBe(21);
-    // Opponent only reveals HP maximum (startingHp), never current HP.
-    expect(view.players.p2.hp).toBe(state.config.startingHp);
+    // Opponent's *current* HP is visible, not just the maximum.
+    expect(view.players.p2.hp).toBe(17);
+    // Hand identities remain hidden; counts remain visible.
+    expect(view.players.p2.hand).toBeNull();
+    expect(view.players.p2.handCount).toBe(state.players.p2.hand.length);
+  });
+
+  it('forfeitGame ends a playing match for the given winner with a log entry', () => {
+    const state = game();
+    const next = forfeitGame(state, 'p2', 'Alice forfeited (opponent did not rejoin). Bob wins.');
+    expect(next.status).toBe('finished');
+    expect(next.winnerId).toBe('p2');
+    expect(next.revision).toBe(state.revision + 1);
+    expect(next.log.at(-1)?.text).toBe('Alice forfeited (opponent did not rejoin). Bob wins.');
+    // The input state is untouched (side-effect free).
+    expect(state.status).toBe('playing');
+    expect(state.winnerId).toBeNull();
+    // A finished game cannot be forfeited twice.
+    expect(() => forfeitGame(next, 'p1', 'again')).toThrowError(GameRuleError);
+  });
+
+  it('setPlayerConnected flips the flag without bumping revision on a finished game', () => {
+    const finished = forfeitGame(game(), 'p2', 'Alice forfeited.');
+    const next = setPlayerConnected(finished, 'p1', false);
+    expect(next.players.p1.connected).toBe(false);
+    expect(next.revision).toBe(finished.revision);
+    // On a still-playing match the flip does bump the revision.
+    const playing = game();
+    const playingNext = setPlayerConnected(playing, 'p1', false);
+    expect(playingNext.revision).toBe(playing.revision + 1);
+    expect(playingNext.players.p1.connected).toBe(false);
   });
 });
 

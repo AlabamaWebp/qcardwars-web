@@ -8,3 +8,4 @@ coverage/
 .env.*
 !.env.example
 .opencode/NIGHT_STATUS.md
+.playwright-mcp/

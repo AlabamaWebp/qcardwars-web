@@ -26,7 +26,6 @@ function connect(url: string): Promise<Client> {
     clients.push(client);
     socket.on('game:state', (v: ClientGameView) => {
       client.view = v;
-      console.error(`[STATE rev=${v.revision} status=${v.status} active=${v.activePlayerId}]`);
     });
     socket.on('room:state', () => { /* room roster change */ });
     socket.on('session:identity', (v) => { client.identity = v; });
@@ -112,7 +111,6 @@ describe('two-client socket smoke (P1-07)', () => {
     await app.listen(0);
     const srv = app.getHttpServer();
     port = (srv.address() as AddressInfo).port;
-    console.error('PORT', port);
   }, 30000);
 
   afterAll(async () => {
@@ -140,9 +138,7 @@ describe('two-client socket smoke (P1-07)', () => {
     expect(sockA.identity!.playerId).not.toBe(sockB.identity!.playerId);
 
     // both have a playing game, same revision
-    console.error('WAIT status...');
     await waitForBoth((a, b) => a.status === 'playing' && b.status === 'playing', 8000);
-    console.error(`status playing revA=${sockA.view!.revision} revB=${sockB.view!.revision} statusA=${sockA.view!.status}`);
     expect(sockA.view!.revision).toBe(sockB.view!.revision);
     expect(sockA.view!.status).toBe('playing');
 
@@ -156,7 +152,6 @@ describe('two-client socket smoke (P1-07)', () => {
     while (true) {
       guard += 1;
       if (guard > 200) throw new Error('victory not reached within turn budget');
-      console.error(`LOOP-START guard=${guard} revA=${sockA.view ? sockA.view.revision : 'null'} revB=${sockB.view ? sockB.view.revision : 'null'}`);
       await waitForBoth((a, b) => a.revision === b.revision, 8000);
       const view = sockA.view!;
       if (view.status === 'finished') break;
@@ -164,8 +159,6 @@ describe('two-client socket smoke (P1-07)', () => {
       const active = view.activePlayerId;
       const activeClient = active === sockA.identity!.playerId ? sockA : sockB;
       if (activeClient.errors.length) throw new Error(`active client error: ${JSON.stringify(activeClient.errors)}`);
-      // DEBUG LOG
-      console.error(`LOOP guard=${guard} revA=${sockA.view!.revision} revB=${sockB.view!.revision} active=${active === sockA.identity!.playerId ? 'A' : 'B'} status=${view.status}`);
       await actForActive(activeClient);
     }
 

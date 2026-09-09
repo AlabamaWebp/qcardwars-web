@@ -440,11 +440,29 @@ export function applyAction(state: GameState, action: GameAction): GameState {
   return next;
 }
 
+/**
+ * End a still-playing match by forfeit: the given player wins and the provided
+ * reason is appended to the log. Used by the server's disconnect grace window
+ * when the opponent never rejoins. Deterministic and side-effect free.
+ */
+export function forfeitGame(state: GameState, winnerId: PlayerId, reason: string): GameState {
+  if (!state.players[winnerId]) fail('NOT_A_PLAYER', 'Winner is not a player in this game.');
+  if (state.status !== 'playing') fail('GAME_FINISHED', 'The game is already finished.');
+  const next = clone(state);
+  next.status = 'finished';
+  next.winnerId = winnerId;
+  addLog(next, reason);
+  next.revision += 1;
+  return next;
+}
+
 export function setPlayerConnected(state: GameState, playerId: PlayerId, connected: boolean): GameState {
   if (!state.players[playerId]) return state;
   const next = clone(state);
   next.players[playerId].connected = connected;
-  next.revision += 1;
+  // A finished match is terminal: flipping a seat's connected flag is cosmetic
+  // (it only feeds the client view), so it must not consume a revision.
+  if (next.status !== 'finished') next.revision += 1;
   return next;
 }
 
@@ -456,14 +474,12 @@ export function toClientView(state: GameState, viewerId: PlayerId): ClientGameVi
     players[id] = {
       id,
       name: player.name,
-      // SPEC "Visibility": a player sees the opponent's HP *maximum* only.
-      // They keep their own current HP but never learn the opponent's current HP
-      // (max HP is constant per game = config.startingHp).
-      hp: id === viewerId ? player.hp : state.config.startingHp,
-      // SPEC "Visibility": a player sees the opponent's mana *maximum* only.
-      // They keep their own current mana (needed to play) but never learn the
-      // opponent's current mana.
-      mana: id === viewerId ? player.mana : player.maxMana,
+      // SPEC "Visibility": the opponent's *current* HP is public. Both players
+      // always see both current HP values (max HP is constant = config.startingHp).
+      hp: player.hp,
+      // SPEC "Visibility": the opponent's *current* mana is public. Both players
+      // always see both current mana values (maxMana is kept separately as-is).
+      mana: player.mana,
       maxMana: player.maxMana,
       hand: id === viewerId ? clone(player.hand) : null,
       handCount: player.hand.length,
