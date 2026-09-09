@@ -1,7 +1,10 @@
-import { Component, computed, effect, inject, signal } from '@angular/core';
+import { Component, DestroyRef, ElementRef, computed, effect, inject, signal } from '@angular/core';
+import type { Faction } from '@qcw/game-core';
 import { getCard, HandCard, LaneState, PlayerId } from '@qcw/game-core';
 import { CardComponent } from './card.component';
-import { GameClientService } from './game-client.service';
+import { FACTION_THEME } from './faction-theme';
+import { GameClientService, VisualEvent } from './game-client.service';
+import { SoundService } from './sound.service';
 
 @Component({
   selector: 'qcw-game',
@@ -19,10 +22,20 @@ import { GameClientService } from './game-client.service';
             @if (client.reconnected()) { <span class="reconnected">reconnected</span> }
             {{ g.status === 'finished' ? 'MATCH OVER' : (client.isMyTurn() ? 'YOUR TURN' : 'OPPONENT TURN') }}
           </div>
-          <button class="end" (click)="endTurn()" [disabled]="!client.isMyTurn()">End turn</button>
+          <div class="header-right">
+            <!-- Phase A.2: sound toggle. Persisted in localStorage (qcw.sound), default on. -->
+            <button
+              class="ghost sound"
+              aria-label="Sound"
+              [attr.aria-pressed]="sound.enabled() ? 'true' : 'false'"
+              [title]="sound.enabled() ? 'Sound on — click to mute' : 'Sound off — click to unmute'"
+              (click)="sound.toggle()"
+            >{{ sound.enabled() ? '🔊' : '🔇' }}</button>
+            <button class="end" (click)="endTurn()" [disabled]="!client.isMyTurn()">End turn</button>
+          </div>
         </header>
 
-        <section class="opponent playerbar">
+        <section class="opponent playerbar" [attr.data-player-bar]="opponentId()">
           <div><b>{{ opponent().name }}</b><span>{{ opponent().connected ? 'online' : 'disconnected' }}</span></div>
           <div>HP <strong>{{ opponent().hp }}</strong></div>
           <div>Mana {{ opponent().mana }}/{{ opponent().maxMana }}</div>
@@ -31,35 +44,59 @@ import { GameClientService } from './game-client.service';
 
         <section class="board">
           @for (lane of g.lanes; track lane.index) {
-            <article class="lane" [class.targetable]="selectedCard() && client.isMyTurn()" (click)="laneClick(lane.index)">
+            <article class="lane" [attr.data-lane-index]="lane.index" [class.targetable]="selectedCard() && client.isMyTurn()" [style.--lane-accent]="laneAccent(lane.type)" [style.--lane-glow]="laneGlow(lane.type)" (click)="laneClick(lane.index)">
               <div class="lane-name">{{ lane.type }} <span>#{{ lane.index + 1 }}</span></div>
               <div class="slot enemy">
                 @if (side(lane, opponentId()).unit; as unit) {
-                  <button class="unit" (click)="selectTarget(lane.index, $event)">
+                  <button class="unit" [attr.data-unit-uid]="unit.uid" [style.--chip-accent]="chipAccent(unit.cardId)" (click)="selectTarget(lane.index, $event)">
                     <b>{{ cardName(unit.cardId) }}</b><span>ATK {{ unit.attack }} · HP {{ unit.health }}/{{ unit.maxHealth }}</span>
+                    <span class="tip">
+                      <span class="tip-name">{{ cardName(unit.cardId) }}</span>
+                      <span class="tip-meta">{{ getDef(unit.cardId).kind }} · {{ getDef(unit.cardId).faction }} · tier {{ getDef(unit.cardId).tier }}</span>
+                      <span class="tip-stats">ATK {{ unit.attack }} · HP {{ unit.health }}/{{ unit.maxHealth }}</span>
+                      <span class="tip-desc">{{ getDef(unit.cardId).description }}</span>
+                    </span>
                   </button>
                 } @else { <span class="empty">enemy unit</span> }
                 @if (side(lane, opponentId()).building; as building) {
-                  <button class="building" (click)="selectTarget(lane.index, $event)">⌂ {{ cardName(building.cardId) }}</button>
+                  <button class="building" [attr.data-building-uid]="building.uid" [style.--chip-accent]="chipAccent(building.cardId)" (click)="selectTarget(lane.index, $event)">⌂ {{ cardName(building.cardId) }}
+                    <span class="tip">
+                      <span class="tip-name">{{ cardName(building.cardId) }}</span>
+                      <span class="tip-meta">{{ getDef(building.cardId).kind }} · {{ getDef(building.cardId).faction }} · tier {{ getDef(building.cardId).tier }}</span>
+                      <span class="tip-desc">{{ getDef(building.cardId).description }}</span>
+                    </span>
+                  </button>
                 }
               </div>
               <div class="divider"></div>
               <div class="slot own">
                 @if (side(lane, g.selfPlayerId).unit; as unit) {
-                  <button class="unit" (click)="ownUnitClick(lane.index, $event)">
+                  <button class="unit" [attr.data-unit-uid]="unit.uid" [style.--chip-accent]="chipAccent(unit.cardId)" (click)="ownUnitClick(lane.index, $event)">
                     <b>{{ cardName(unit.cardId) }}</b><span>ATK {{ unit.attack }} · HP {{ unit.health }}/{{ unit.maxHealth }}</span>
                     @if (specialLabel(unit.cardId); as label) { <small>{{ label }} · survived {{ unit.turnsSurvived }}</small> }
+                    <span class="tip">
+                      <span class="tip-name">{{ cardName(unit.cardId) }}</span>
+                      <span class="tip-meta">{{ getDef(unit.cardId).kind }} · {{ getDef(unit.cardId).faction }} · tier {{ getDef(unit.cardId).tier }}</span>
+                      <span class="tip-stats">ATK {{ unit.attack }} · HP {{ unit.health }}/{{ unit.maxHealth }}</span>
+                      <span class="tip-desc">{{ getDef(unit.cardId).description }}</span>
+                    </span>
                   </button>
                 } @else { <span class="empty">your unit</span> }
                 @if (side(lane, g.selfPlayerId).building; as building) {
-                  <div class="building">⌂ {{ cardName(building.cardId) }}</div>
+                  <div class="building" tabindex="0" [attr.data-building-uid]="building.uid" [style.--chip-accent]="chipAccent(building.cardId)">⌂ {{ cardName(building.cardId) }}
+                    <span class="tip">
+                      <span class="tip-name">{{ cardName(building.cardId) }}</span>
+                      <span class="tip-meta">{{ getDef(building.cardId).kind }} · {{ getDef(building.cardId).faction }} · tier {{ getDef(building.cardId).tier }}</span>
+                      <span class="tip-desc">{{ getDef(building.cardId).description }}</span>
+                    </span>
+                  </div>
                 }
               </div>
             </article>
           }
         </section>
 
-        <section class="self playerbar">
+        <section class="self playerbar" [attr.data-player-bar]="g.selfPlayerId">
           <div><b>{{ self().name }}</b><span>{{ self().connected ? 'online' : 'disconnected' }}</span></div>
           <div>HP <strong>{{ self().hp }}</strong></div>
           <div>Mana <strong>{{ self().mana }}/{{ self().maxMana }}</strong></div>
@@ -123,20 +160,78 @@ import { GameClientService } from './game-client.service';
     .playerbar { display:flex; align-items:center; gap:18px; flex-wrap:wrap; padding:9px 13px; background:#11151d; border:1px solid #272d38; border-radius:12px; font-size:13px; }
     .playerbar>div:first-child { margin-right:auto; display:flex; gap:8px; align-items:baseline; }.playerbar span{font-size:10px;color:#7ad78d}.playerbar strong{font-size:18px}
     .board { display:grid; grid-template-columns:repeat(4,minmax(150px,1fr)); gap:8px; min-height:420px; }
-    .lane { background:linear-gradient(#151a23,#0e1117); border:1px solid #2d3441; border-radius:13px; padding:9px; display:grid; grid-template-rows:auto 1fr 1px 1fr; gap:8px; min-width:0; }
-    .lane.targetable:hover{border-color:#d7b76c}.lane-name{text-transform:uppercase;letter-spacing:.12em;font-size:11px;font-weight:900;color:#d7b76c;display:flex;justify-content:space-between}.lane-name span{color:#687183}
+    /* Faction identity (Phase A.1): --lane-accent/--lane-glow are set per lane from
+       lane.type via [style.*] bindings; the gold targetable hover still wins. */
+    .lane { background:linear-gradient(#151a23,#0e1117); border:1px solid var(--lane-accent,#2d3441); box-shadow:0 0 14px -3px var(--lane-glow,transparent); border-radius:13px; padding:9px; display:grid; grid-template-rows:auto 1fr 1px 1fr; gap:8px; min-width:0; }
+    .lane.targetable:hover{border-color:#d7b76c}.lane-name{text-transform:uppercase;letter-spacing:.12em;font-size:11px;font-weight:900;color:var(--lane-accent,#d7b76c);display:flex;justify-content:space-between}.lane-name span{color:#687183}
     .slot{display:grid;align-content:center;gap:6px;min-height:150px}.divider{background:#343b48}.empty{display:grid;place-items:center;height:100%;border:1px dashed #313847;border-radius:10px;color:#515b6c;font-size:11px;text-transform:uppercase;letter-spacing:.1em}
-    .unit,.building{width:100%;border:1px solid #3c4554;background:#202631;color:#fff;border-radius:10px;padding:10px;text-align:left}.unit{display:grid;gap:5px}.unit span,.unit small{font-size:11px;color:#c1c7d2}.unit small{color:#d7b76c}.building{font-size:11px;background:#242017;border-color:#50462e;color:#e7d49e}
+    /* --chip-accent is set per chip from getCard(cardId).faction; the inset shadow
+       (not a wider border) tints the left edge with zero layout shift. */
+    .unit,.building{width:100%;position:relative;border:1px solid #3c4554;background:#202631;color:#fff;border-radius:10px;padding:10px;text-align:left;box-shadow:inset 3px 0 0 0 var(--chip-accent,transparent)}.unit{display:grid;gap:5px}.unit>span,.unit>small{font-size:11px;color:#c1c7d2}.unit>small{color:#d7b76c}.building{font-size:11px;background:#242017;border-color:#50462e;color:#e7d49e}
+    /* Board tooltips (Phase A.1) — CSS-only, catalog data only (same visibility
+       baseline as the existing chips: board units/buildings are already fully
+       visible to both players). Absolutely positioned, so they never join the
+       .unit grid rows or shift layout. Desktop: above the chip — no ancestor
+       clips (no overflow rules on .board/.lane/.slot at >=851px); z-index keeps
+       it above the player bars it may overlap.
+       Mobile (<=850px): the scrolling .board (overflow-x:auto → computed
+       overflow-y:auto) is the only clipping box, so enemy-chip tooltips flip
+       below the chip and own-chip tooltips stay above — both remain inside the
+       board — and tooltips pin to the chip's horizontal extent so edge lanes
+       are never clipped and nothing causes page-level scroll.
+       Mobile tap: tapping a chip focuses it (mobile Chrome and iOS Safari focus
+       <button>/[tabindex] on tap), so the :focus reveal shows the same tooltip
+       with no JS toggle and no change to click behavior — a tap still performs
+       the existing selectTarget/ownUnitClick action exactly as before, and
+       tapping elsewhere moves focus and dismisses the tooltip. */
+    .tip{display:none;position:absolute;bottom:calc(100% + 8px);left:50%;transform:translateX(-50%);width:235px;background:rgba(11,14,20,.97);border:1px solid #454f61;border-radius:10px;padding:10px 11px;z-index:80;pointer-events:none;box-shadow:0 12px 28px #000c;text-align:left}
+    .tip-name{display:block;font-weight:800;font-size:12px;color:#fff}
+    .tip-meta{display:block;font-size:10px;letter-spacing:.06em;text-transform:capitalize;color:#8b93a5;margin-top:2px}
+    .tip-stats{display:block;font-size:11px;font-weight:700;color:#d7b76c;margin-top:5px}
+    .tip-desc{display:block;font-size:11px;line-height:1.45;color:#c7ccd7;margin-top:5px}
+    .unit:hover>.tip,.unit:focus>.tip,.building:hover>.tip,.building:focus>.tip{display:block}
+    @media(max-width:850px){.tip{left:6px;right:6px;width:auto;transform:none}.slot.enemy .tip{bottom:auto;top:calc(100% + 8px)}}
     .hand { display:flex; gap:8px; overflow-x:auto; padding:10px 2px 14px; min-height:230px; align-items:flex-start; }
     .footer-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.hint,.log{background:#11151d;border:1px solid #272d38;border-radius:12px;padding:12px;font-size:12px;color:#aeb6c5}.log{display:grid;gap:4px}.error{margin-top:8px;color:#ff9da5}
     .modal-backdrop{position:fixed;inset:0;background:#000b;display:grid;place-items:center;padding:20px}.modal{background:#151a23;border:1px solid #3b4352;border-radius:18px;padding:28px;max-width:440px;text-align:center}.modal h2{font-size:48px;margin:4px}.modal p{color:#aeb6c5;line-height:1.5}.modal button{background:#d7b76c;border:0;padding:11px 18px;border-radius:9px;font-weight:800}.eyebrow{text-transform:uppercase;letter-spacing:.15em;color:#d7b76c;font-size:10px}
     @media(max-width:850px){.board{overflow-x:auto;grid-template-columns:repeat(4,180px);min-height:390px}.footer-grid{grid-template-columns:1fr}header{grid-template-columns:1fr auto}.turn{display:none}.playerbar{gap:10px}.game-shell{padding:8px}}
     .modal-actions{display:flex;gap:10px;justify-content:center;margin-top:12px}.modal-actions .ghost{background:transparent;color:#aeb6c5;border:1px solid #3e4655;padding:11px 18px;border-radius:9px}.modal .waiting{color:#d7b76c;min-height:1.5em}
     .primary{background:#d7b76c;color:#111;border-color:#d7b76c;border:0;padding:11px 18px;border-radius:9px;font-weight:800}
+    /* Phase A.2 — header-right groups the sound toggle + End turn so the
+       existing 3-column (2-column mobile) header grid is undisturbed. */
+    .header-right{display:flex;align-items:center;gap:8px;justify-self:end}
+    .sound{font-size:16px;line-height:1;padding:8px 9px;border-radius:9px}
+    /* Phase A.2 — combat/turn animations. Pure CSS keyframes, non-blocking,
+       re-triggered from JS by removing the class, forcing a reflow, re-adding
+       it (see GameComponent.retrigger), so rapid successive updates restart
+       rather than stack/jitter. No layout shift: only transform/opacity/
+       box-shadow/background animate.
+       Destruction is rendered as a red flash on the LANE (not a ghost/fade of
+       the chip): Angular removes the dead chip's element immediately, so a
+       fade-out would need to keep the element alive artificially; the lane
+       flash is the simplest robust signal that "something died here". */
+    @keyframes qcw-pop{0%{transform:scale(.55);opacity:0}65%{transform:scale(1.07);opacity:1}100%{transform:scale(1)}}
+    .pop{animation:qcw-pop .3s ease-out}
+    @keyframes qcw-hit{
+      0%,100%{box-shadow:inset 3px 0 0 0 var(--chip-accent,transparent);transform:translateX(0)}
+      25%{box-shadow:inset 3px 0 0 0 var(--chip-accent,transparent),0 0 12px 2px #e0484e;background-color:#5b2b33;transform:translateX(-3px)}
+      50%{transform:translateX(3px)}
+      75%{box-shadow:inset 3px 0 0 0 var(--chip-accent,transparent),0 0 10px 1px #e0484e;background-color:#4d2430;transform:translateX(-2px)}
+    }
+    .unit.hit,.building.hit{animation:qcw-hit .35s ease-in-out}
+    @keyframes qcw-hero-hit{0%,100%{border-color:#272d38;background-color:#11151d}35%{border-color:#e0484e;background-color:#2a161c}70%{border-color:#7e3a3f;background-color:#1a141c}}
+    .playerbar.hit{animation:qcw-hero-hit .45s ease-in-out}
+    @keyframes qcw-lane-hit{0%,100%{box-shadow:0 0 14px -3px var(--lane-glow,transparent)}30%{box-shadow:0 0 18px 2px #e0484e}}
+    .lane.lane-hit{animation:qcw-lane-hit .5s ease-in-out}
+    @keyframes qcw-pulse{0%,100%{background:transparent}30%{background:rgba(215,183,108,.18)}}
+    .turn.pulse{animation:qcw-pulse .6s ease}
+    @media (prefers-reduced-motion: reduce){.pop,.hit,.lane-hit,.pulse{animation:none !important}}
   `],
 })
 export class GameComponent {
   readonly client = inject(GameClientService);
+  readonly sound = inject(SoundService);
+  private readonly el = inject(ElementRef);
   readonly selectedCard = signal<HandCard | null>(null);
   readonly selectedSpecialLane = signal<number | null>(null);
   readonly rematchRequested = signal(false);
@@ -148,7 +243,17 @@ export class GameComponent {
   });
   readonly opponent = computed(() => this.game()!.players[this.opponentId()]);
 
+  /** Highest visual-event id already applied (Phase A.2). */
+  private processedFx = 0;
+  /** Pending frameFx rAF ids — cancelled on destroy so no fx write runs after teardown. */
+  private pendingFx = new Set<number>();
+
   constructor() {
+    inject(DestroyRef).onDestroy(() => {
+      for (const id of this.pendingFx) cancelAnimationFrame(id);
+      this.pendingFx.clear();
+    });
+
     // Clear the "waiting for opponent" banner once a fresh match starts.
     effect(() => {
       const g = this.game();
@@ -156,10 +261,101 @@ export class GameComponent {
         this.rematchRequested.set(false);
       }
     });
+
+    // Phase A.2: apply each derived visual event exactly once — CSS re-trigger
+    // on the matching element plus the matching synthesized sound cue. Runs
+    // after change detection, so the DOM already reflects the new view.
+    effect(() => {
+      for (const event of this.client.visualEvents()) {
+        if (event.id <= this.processedFx) continue;
+        this.processedFx = event.id;
+        this.applyFx(event);
+      }
+    });
+  }
+
+  /** Re-run a CSS animation on an element by toggling its class with a reflow. */
+  private retrigger(selector: string, className: string): void {
+    const node = this.el.nativeElement.querySelector(selector) as HTMLElement | null;
+    if (!node) return;
+    node.classList.remove(className);
+    void node.offsetWidth; // force reflow so the animation restarts instead of stacking
+    node.classList.add(className);
+  }
+
+  /**
+   * DOM writes are deferred to the next animation frame: a signal effect can
+   * run before the view update that creates a freshly placed chip is painted,
+   * so an immediate querySelector would miss brand-new elements. rAF also
+   * guarantees the write happens after paint (non-blocking) and keeps rapid
+   * successive updates from stacking — each frame re-triggers at most once.
+   */
+  private frameFx(fn: () => void): void {
+    const id = requestAnimationFrame(() => {
+      this.pendingFx.delete(id);
+      fn();
+    });
+    this.pendingFx.add(id);
+  }
+
+  private applyFx(event: VisualEvent): void {
+    const game = this.game();
+    switch (event.type) {
+      case 'unit-placed':
+      case 'building-placed': {
+        this.sound.playCardPlayed();
+        if (event.uid) {
+          const attr = event.type === 'unit-placed' ? 'data-unit-uid' : 'data-building-uid';
+          const uid = event.uid;
+          this.frameFx(() => this.retrigger(`[${attr}="${uid}"]`, 'pop'));
+        }
+        break;
+      }
+      case 'unit-damaged': {
+        this.sound.playUnitDamaged();
+        if (event.uid) {
+          const uid = event.uid;
+          this.frameFx(() => this.retrigger(`[data-unit-uid="${uid}"]`, 'hit'));
+        }
+        break;
+      }
+      case 'unit-destroyed':
+      case 'building-destroyed': {
+        // Simplest robust choice (see CSS comment): flash the lane, not the
+        // already-removed chip.
+        this.sound.playDestroyed();
+        if (event.laneIndex !== undefined) {
+          const laneIndex = event.laneIndex;
+          this.frameFx(() => this.retrigger(`[data-lane-index="${laneIndex}"]`, 'lane-hit'));
+        }
+        break;
+      }
+      case 'hero-damaged': {
+        this.sound.playHeroHit();
+        if (event.playerId) {
+          const playerId = event.playerId;
+          this.frameFx(() => this.retrigger(`[data-player-bar="${playerId}"]`, 'hit'));
+        }
+        break;
+      }
+      case 'turn-changed': {
+        this.frameFx(() => this.retrigger('.turn', 'pulse'));
+        break;
+      }
+      case 'match-finished': {
+        this.sound.playMatchEnd(Boolean(game && event.winnerId === game.selfPlayerId));
+        break;
+      }
+    }
   }
 
   getDef = getCard;
   cardName(cardId: string) { return getCard(cardId).name; }
+  /** Faction accent for a lane frame, from the lane's fixed type. */
+  laneAccent(faction: Faction) { return FACTION_THEME[faction].accent; }
+  laneGlow(faction: Faction) { return FACTION_THEME[faction].glow; }
+  /** Faction accent for a board chip, from its card definition ('universal' cards keep the universal tint). */
+  chipAccent(cardId: string) { return FACTION_THEME[getCard(cardId).faction].accent; }
   specialLabel(cardId: string) {
     const card = getCard(cardId);
     return card.kind === 'unit' ? card.special?.name ?? null : null;

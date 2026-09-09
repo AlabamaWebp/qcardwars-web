@@ -1,17 +1,17 @@
 # QCardWars Web — Improvement Ledger (multi-phase upgrade)
 
-Last updated: Phase 0a + 0b complete and committed (incl. stale-token rejoin hardening + 9 reviewer fixes across 4 review passes, final verdict PASS); 0c next.
+Last updated: Phase A (A.1 faction identity/tooltips + A.2 animations/sound) complete, `pnpm verify` green, live-browser verified; reviewer pass 1 (NEEDS_FIXES: 1 HIGH + 4 LOW) fully fixed + re-verified; awaiting reviewer re-pass before local commit. Phase 0a + 0b committed. 0c still optional.
 
 ## Phase plan
 - **Phase 0 — defects & foundation**
   - [x] 0a Rejoin grace token + configurable disconnect timeout (server + client + service tests + SPEC.md) — DONE; 16 service tests incl. stale-token fallback, connected-seat protection, expiry precedence, double rejoin cycle.
   - [x] 0b Opponent real HP/mana visible in `toClientView` (hand stays count-only) + tests + UI + SPEC.md — DONE.
   - [ ] 0c Playwright e2e foundation + two-client browser smoke (manual multi-context matrix already done; codify as a repeatable script/test if budget allows)
-- **Phase A — design/UX**: faction visual identity, card tooltips, combat animations, sound effects (toggleable).
-- **Phase B — rules**: new effect primitives `debuff`, `dot`, `aoe`, `add-card`, `gain-mana`, `heal-hero`, `move-unit`, `destroy-unit` (min 5 must remain if budget slips) + engine tests per primitive + illegal-action tests.
-- **Phase C — content**: expand catalog to 40–60 cards across factions/kinds.
-- **Phase D — modes**: solo AI opponent, rejoin e2e (browser), match summary screen; spectator optional (drop first if needed).
-- **End task**: player-selectable 4 lane types at game start (lobby UI + createGame config + server validation).
+- [x] **Phase A — design/UX**: faction visual identity, card tooltips, combat animations, sound effects (toggleable) — DONE (A.1 CSS-only; A.2 presentational FX + WebAudio; 5 reviewer findings fixed; browser-verified; `pnpm verify` green; commit pending reviewer re-pass).
+- [ ] **Phase B — rules**: new effect primitives `debuff`, `dot`, `aoe`, `add-card`, `gain-mana`, `heal-hero`, `move-unit`, `destroy-unit` (min 5 must remain if budget slips) + engine tests per primitive + illegal-action tests.
+- [ ] **Phase C — content**: expand catalog to 40–60 cards across factions/kinds.
+- [ ] **Phase D — modes**: solo AI opponent, rejoin e2e (browser), match summary screen; spectator optional (drop first if needed).
+- [ ] **End task**: player-selectable 4 lane types at game start (lobby UI + createGame config + server validation).
 
 ## Constraints (never break)
 - Server-authoritative, deterministic core, revision-checked actions.
@@ -38,4 +38,6 @@ Last updated: Phase 0a + 0b complete and committed (incl. stale-token rejoin har
   no live grace) — no stuck `playing` match.
 
 ## Next
-1. Phase 0c (e2e codification, optional) → Phase A (design/UX: faction visual identity, card tooltips, combat animations, toggleable sound).
+1. Reviewer re-pass on the Phase A fix diff → commit Phase A locally on PASS.
+2. Phase B (rules): new effect primitives (min 5) + engine tests per primitive + illegal-action tests.
+3. Phase 0c (e2e codification) remains optional; do it if budget allows.
