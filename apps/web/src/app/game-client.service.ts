@@ -185,6 +185,9 @@ export class GameClientService {
       const prev = this.lastView;
       this.lastView = value;
       this.game.set(value);
+      // A finished match is covered by the victory modal; a stale error from
+      // before the end (e.g. opponent forfeited) is pointless behind it.
+      if (value.status === 'finished') this.error.set(null);
       // Derive visual events only for forward revisions of the same room
       // (a revision drop means a fresh match/room — anchor, don't diff).
       if (prev && prev.roomCode === value.roomCode && value.revision > prev.revision) {

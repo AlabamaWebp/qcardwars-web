@@ -1,6 +1,6 @@
 # QCardWars Web — Improvement Ledger (multi-phase upgrade)
 
-Last updated: Phase B (effect primitives) delivered + independently browser-verified; two real bugs found and fixed during verification (stale game-core pre-bundle via tsconfig `paths`→source; client `game:state` handler wiping rule-rejection errors). `pnpm verify` green. Reviewer pass on the Phase B diff pending. Phase A committed `1943c8a` (reviewer PASS). Phase 0a + 0b committed. 0c still optional.
+Last updated: Phase B complete — committed `1bf52e1`, reviewer **PASS** (1 MED + 3 LOW, non-blocking; LOW-2 stale-error-behind-modal already fixed + browser-verified). MED (poison/dot UI indicator) + test gaps + optional special-click fix folded into the Phase C brief. `pnpm verify` green. Phase A committed `1943c8a` (reviewer PASS). Phase 0a + 0b committed. 0c still optional.
 
 ## Phase plan
 - **Phase 0 — defects & foundation**
@@ -9,7 +9,7 @@ Last updated: Phase B (effect primitives) delivered + independently browser-veri
   - [ ] 0c Playwright e2e foundation + two-client browser smoke (manual multi-context matrix already done; scratch script exists at `.opencode/browser-check/`, gitignored; codify as a repeatable test if budget allows)
 - [x] **Phase A — design/UX**: faction visual identity, card tooltips, combat animations, sound effects (toggleable) — DONE + committed `1943c8a` (A.1 CSS-only; A.2 presentational FX + WebAudio; 5 reviewer findings fixed; browser-verified; `pnpm verify` green).
 - [x] **Phase B — rules**: 7 of 8 planned primitives delivered — `debuff-unit`, `dot`, `aoe`, `add-card`, `gain-mana`, `heal-hero`, `destroy-unit` (min-5 constraint satisfied; `move-unit` deliberately deferred as lowest-value/least-orthogonal) + 11 catalog cards + 16 new engine tests (51 total) + 2 new error codes + `validateEffects()` hardening. Browser-verified: full 2-client matches to victory, new cards seen and accepted in live play (Scorched Earth aoe, Overcharge gain-mana).
-- [ ] **Phase C — content**: expand catalog to 40–60 cards across factions/kinds.
+- [ ] **Phase C — content**: expand catalog to 40–60 cards across factions/kinds (reuse the 7 primitives, no new engine branching) + poison/dot UI indicator (reviewer MED: chip badge + tooltip; `ClientGameView` already carries the data) + reviewer test gaps (aoe on lane with building, `UNKNOWN_CARD` via `handleSpecial`, dot + combat same round) + optional: `target:'none'` specials execute on first click.
 - [ ] **Phase D — modes**: solo AI opponent, rejoin e2e (browser), match summary screen; spectator optional (drop first if needed).
 - [ ] **End task**: player-selectable 4 lane types at game start (lobby UI + createGame config + server validation).
 
@@ -38,8 +38,8 @@ Last updated: Phase B (effect primitives) delivered + independently browser-veri
   no live grace) — no stuck `playing` match.
 
 ## Next
-1. Reviewer pass on the Phase B diff (game-core primitives/validation/catalog/tests + client error-persistence fix + web tsconfig `paths`/`rootDir`) → commit on PASS.
-2. Phase C (content): expand catalog to 40–60 cards (reuse the 7 primitives; no new engine branching).
+1. Phase C (coder): catalog 40–60 cards + poison/dot UI indicator + reviewer test gaps + optional special first-click execution. Then reviewer pass → commit.
+2. Phase D (modes): solo AI opponent, rejoin e2e (browser), match summary screen; spectator optional (drop first if needed).
 3. Phase 0c (e2e codification) remains optional; do it if budget allows.
 
 ## Phase B verification notes (this pass)
