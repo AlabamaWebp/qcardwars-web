@@ -178,10 +178,13 @@ export class GameClientService {
     });
     this.socket.on('room:state', (value: RoomView) => this.room.set(value));
     this.socket.on('game:state', (value: ClientGameView) => {
+      // NOTE: do NOT clear `error` here. The gateway re-broadcasts state right
+      // after emitting server:error on a rejected action, which would wipe the
+      // message before the user can read it. Errors are cleared by sendAction /
+      // createRoom / joinRoom / rematch / clearError / resetLocalSession.
       const prev = this.lastView;
       this.lastView = value;
       this.game.set(value);
-      this.error.set(null);
       // Derive visual events only for forward revisions of the same room
       // (a revision drop means a fresh match/room — anchor, don't diff).
       if (prev && prev.roomCode === value.roomCode && value.revision > prev.revision) {

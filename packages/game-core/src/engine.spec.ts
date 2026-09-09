@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  CARD_BY_ID,
   CARD_CATALOG,
   createGame,
   applyAction,
@@ -7,6 +8,8 @@ import {
   setPlayerConnected,
   GameRuleError,
   toClientView,
+  CardDefinition,
+  Effect,
 } from './index';
 
 function game(seed = 2) {
@@ -653,5 +656,362 @@ describe('new catalog content', () => {
     expect(state.lanes[1].sides.p1.unit?.attack).toBe(4);
     expect(state.lanes[1].sides.p1.unit?.maxHealth).toBe(3);
     expect(state.lanes[1].sides.p1.unit?.health).toBe(3);
+  });
+});
+
+// =============================================================================
+// Phase B effect primitives: debuff-unit, dot, aoe, add-card, gain-mana,
+// heal-hero, destroy-unit.
+// =============================================================================
+
+describe('phase B effect primitives', () => {
+  it('dot ticks at the start of the target owner turns and replaces instead of stacking (dot)', () => {
+    let state = game(40);
+    state = setActive(state, 'p2');
+    state = playCard(state, 'p2', 'combine-metrocop', 1); // 2/3, p2
+    state = endTurn(state, 'p2');
+    state = setActive(state, 'p1');
+
+    state = playCard(state, 'p1', 'power-venom', 1); // dot 2/2, no immediate damage
+    expect(state.lanes[1].sides.p2.unit?.dot).toEqual({ amount: 2, turns: 2 });
+    expect(state.lanes[1].sides.p2.unit?.health).toBe(3);
+    expect(state.players.p1.mana).toBe(8);
+
+    // p1 ends: p2's turn starts → tick 1 (3-2=1)
+    state = endTurn(state, 'p1');
+    expect(state.lanes[1].sides.p2.unit?.health).toBe(1);
+    expect(state.lanes[1].sides.p2.unit?.dot).toEqual({ amount: 2, turns: 1 });
+
+    // p2's turn: venom is enemy-unit, so p2 cannot re-poison its own unit. p2 just ends;
+    // p2's unit does NOT tick during p1's turn.
+    state = endTurn(state, 'p2');
+    expect(state.lanes[1].sides.p2.unit?.health).toBe(1);
+    expect(state.lanes[1].sides.p2.unit?.dot).toEqual({ amount: 2, turns: 1 });
+
+    // p1 re-applies venom to the SAME p2 unit: the dot slot is REPLACED, not stacked.
+    state = setActive(state, 'p1');
+    state = playCard(state, 'p1', 'power-venom', 1);
+    expect(state.lanes[1].sides.p2.unit?.dot).toEqual({ amount: 2, turns: 2 });
+    expect(state.lanes[1].sides.p2.unit?.health).toBe(1); // no immediate damage
+
+    // p1 ends: p2's turn starts → the REPLACED dot ticks (1-2 → destroyed).
+    state = endTurn(state, 'p1');
+    expect(state.lanes[1].sides.p2.unit).toBeNull();
+    expect(state.log.some((e) => /is destroyed in lane 2/.test(e.text))).toBe(true);
+  });
+
+  it('aoe damages units on both sides of the target lane (aoe)', () => {
+    let state = game(41);
+    state = setActive(state, 'p2');
+    state = playCard(state, 'p2', 'combine-metrocop', 1); // 2/3
+    state = endTurn(state, 'p2');
+    state = setActive(state, 'p1');
+    state = playCard(state, 'p1', 'combine-metrocop', 1); // 2/3
+    state = structuredClone(state);
+    state.lanes[1].sides.p2.unit!.health = 2; // aoe (2) kills p2's, wounds p1's
+
+    state = playCard(state, 'p1', 'power-scorch', 1);
+    expect(state.lanes[1].sides.p1.unit?.health).toBe(1);
+    expect(state.lanes[1].sides.p2.unit).toBeNull();
+    expect(state.players.p1.mana).toBe(5); // 10 - 2 (metrocop) - 3 (scorch)
+    expect(state.log.some((e) => /damage hits both sides of lane 2/.test(e.text))).toBe(true);
+    // Other lanes are untouched.
+    expect(state.lanes[0].sides.p1.unit).toBeNull();
+    expect(state.lanes[2].sides.p2.unit).toBeNull();
+  });
+
+  it('debuff clamps attack at 0 and kills the unit when health reaches 0 (debuff-unit)', () => {
+    let state = game(42);
+    state = setActive(state, 'p2');
+    state = playCard(state, 'p2', 'combine-metrocop', 1); // 2/3
+    state = endTurn(state, 'p2');
+    state = setActive(state, 'p1');
+
+    state = playCard(state, 'p1', 'power-wither', 1); // -2 atk, 1 dmg
+    let unit = state.lanes[1].sides.p2.unit!;
+    expect(unit.attack).toBe(0); // 2 - 2, clamped at 0
+    expect(unit.health).toBe(2);
+
+    state = playCard(state, 'p1', 'power-wither', 1);
+    unit = state.lanes[1].sides.p2.unit!;
+    expect(unit.attack).toBe(0); // stays clamped
+    expect(unit.health).toBe(1);
+
+    state = playCard(state, 'p1', 'power-wither', 1); // 1 - 1 = 0 → destroyed
+    expect(state.lanes[1].sides.p2.unit).toBeNull();
+    expect(state.log.some((e) => /is destroyed in lane 2/.test(e.text))).toBe(true);
+  });
+
+  it('add-card appends a catalog card to the actor hand and no-ops with a log when full (add-card)', () => {
+    let state = game(43);
+    state = setActive(state, 'p1');
+    const handBefore = state.players.p1.hand.length;
+
+    state = playCard(state, 'p1', 'power-salvage', 0);
+    expect(state.players.p1.hand.length).toBe(handBefore + 1);
+    expect(state.players.p1.hand.some((c) => c.cardId === 'universal-mercenary')).toBe(true);
+    expect(state.log.some((e) => /adds\s+Mercenary to their hand/.test(e.text))).toBe(true);
+
+    // Full hand: pad to handCap-1 so that giveCard (inside playCard) brings the hand to
+    // exactly the cap — the played card is one of a full hand. The play still succeeds,
+    // the added card is NOT appended (no room), and the log explains why.
+    state = structuredClone(state);
+    while (state.players.p1.hand.length < state.config.handCap - 1) {
+      state.players.p1.hand.push({ uid: `pad-${state.players.p1.hand.length}`, cardId: 'bucket' });
+    }
+    const expected = state.config.handCap - 1; // hand returns to this after consuming the power card
+    const mercsBefore = state.players.p1.hand.filter((c) => c.cardId === 'universal-mercenary').length;
+    state = playCard(state, 'p1', 'power-salvage', 0);
+    expect(state.players.p1.hand.length).toBe(expected);
+    expect(state.players.p1.hand.filter((c) => c.cardId === 'universal-mercenary').length).toBe(mercsBefore);
+    expect(state.log.some((e) => /hand is full/.test(e.text))).toBe(true);
+  });
+
+  it('gain-mana raises actor mana, clamped at maxMana (gain-mana)', () => {
+    let state = game(44);
+    state = setActive(state, 'p1');
+    state.players.p1.mana = 5;
+    state = playCard(state, 'p1', 'power-overcharge', 0); // 5 + 2 - 1
+    expect(state.players.p1.mana).toBe(6);
+    expect(state.log.some((e) => /gains 2 mana/.test(e.text))).toBe(true);
+
+    state = structuredClone(state);
+    state.players.p1.mana = 9;
+    state = playCard(state, 'p1', 'power-overcharge', 0); // 9 + 2 clamped to 10, - 1
+    expect(state.players.p1.mana).toBe(9);
+  });
+
+  it('heal-hero restores actor hero HP, clamped at startingHp, and never touches the enemy (heal-hero)', () => {
+    let state = game(46);
+    state = setActive(state, 'p1');
+    state.players.p1.hp = 25;
+    state = playCard(state, 'p1', 'power-mend', 0);
+    expect(state.players.p1.hp).toBe(28);
+    expect(state.players.p2.hp).toBe(30); // enemy untouched
+
+    state = structuredClone(state);
+    state.players.p1.hp = 29;
+    state = playCard(state, 'p1', 'power-mend', 0); // 29 + 3 clamped at 30
+    expect(state.players.p1.hp).toBe(30);
+  });
+
+  it('destroy-unit removes the target unit outright (destroy-unit)', () => {
+    let state = game(48);
+    state = setActive(state, 'p2');
+    state = playCard(state, 'p2', 'zombie-poison', 3); // 4/8
+    state = endTurn(state, 'p2');
+    state = setActive(state, 'p1');
+
+    state = playCard(state, 'p1', 'power-execution', 3);
+    expect(state.lanes[3].sides.p2.unit).toBeNull();
+    expect(state.log.some((e) => /Poison Zombie is destroyed in lane 4/.test(e.text))).toBe(true);
+    expect(state.players.p1.mana).toBe(5); // 10 - 5
+  });
+
+  it('antlion-spitter "Venom Coating" applies a dot via a special (dot special)', () => {
+    let state = game(49);
+    state = setActive(state, 'p1');
+    state = playCard(state, 'p1', 'antlion-spitter', 0);
+    state = endTurn(state, 'p1');
+    state = endTurn(state, 'p2'); // spitter survived a turn
+    state = setActive(state, 'p1');
+    state = structuredClone(state);
+    state.lanes[0].sides.p2.unit = {
+      uid: 'd',
+      cardId: 'combine-metrocop',
+      ownerId: 'p2',
+      attack: 2,
+      health: 3,
+      maxHealth: 3,
+      turnsSurvived: 1,
+      specialUsesRemaining: 0,
+    };
+
+    state = activateSpecial(state, 'p1', 0, 0);
+    expect(state.lanes[0].sides.p2.unit?.dot).toEqual({ amount: 2, turns: 2 });
+    expect(state.lanes[0].sides.p2.unit?.health).toBe(3); // no immediate damage
+  });
+
+  it('combine-drone "Overtap" grants mana via a target-none special (gain-mana special)', () => {
+    let state = game(50);
+    state = setActive(state, 'p1');
+    state = playCard(state, 'p1', 'combine-drone', 1);
+    state = endTurn(state, 'p1');
+    state = endTurn(state, 'p2'); // drone survived a turn
+    state = setActive(state, 'p1'); // mana 10 / maxMana 10
+    state.players.p1.mana = 8; // leave headroom under the cap so the gain is observable
+
+    const manaBefore = state.players.p1.mana; // 8
+    state = activateSpecial(state, 'p1', 1);
+    // Overtap: pay 1 (8 → 7), then gain min(2, maxMana - 7) = 2 → 9. Net +1.
+    expect(state.players.p1.mana).toBe(manaBefore + 1);
+  });
+
+  it('rebel-engineer "Field Medkit" heals the actor hero via a target-none special (heal-hero special)', () => {
+    let state = game(56);
+    state = setActive(state, 'p1');
+    state.players.p1.hp = 20;
+    state = playCard(state, 'p1', 'rebel-engineer', 2);
+    state = endTurn(state, 'p1');
+    state = endTurn(state, 'p2'); // engineer survived a turn
+    state = setActive(state, 'p1');
+
+    state = activateSpecial(state, 'p1', 2);
+    expect(state.players.p1.hp).toBe(22);
+  });
+
+  it('toClientView carries the dot slot through to the lane view (client view flow)', () => {
+    let state = game(51);
+    state = setActive(state, 'p2');
+    state = playCard(state, 'p2', 'combine-metrocop', 1);
+    state = endTurn(state, 'p2');
+    state = setActive(state, 'p1');
+    state = playCard(state, 'p1', 'power-venom', 1);
+
+    const view = toClientView(state, 'p1');
+    expect(view.lanes[1].sides.p2.unit?.dot).toEqual({ amount: 2, turns: 2 });
+  });
+});
+
+describe('illegal actions (phase B)', () => {
+  /** Temporarily register a test-only card definition, restored in `finally`. */
+  function withFakeCard(card: CardDefinition, fn: () => void): void {
+    (CARD_CATALOG as CardDefinition[]).push(card);
+    CARD_BY_ID.set(card.id, card);
+    try {
+      fn();
+    } finally {
+      CARD_BY_ID.delete(card.id);
+      const mutable = CARD_CATALOG as CardDefinition[];
+      mutable.splice(mutable.indexOf(card), 1);
+    }
+  }
+
+  it('rejects an aoe power whose target is not a lane (AOE_REQUIRES_LANE)', () => {
+    withFakeCard(
+      {
+        id: 'test-aoe-bad',
+        name: 'Bad AOE',
+        kind: 'power',
+        faction: 'universal',
+        tier: 1,
+        cost: 1,
+        description: 'test',
+        target: 'none',
+        effects: [{ type: 'aoe', amount: 1 }],
+      },
+      () => {
+        let state = game(52);
+        const active = state.activePlayerId;
+        state = setActive(state, active);
+        const provided = giveCard(state, active, 'test-aoe-bad');
+        expect(
+          ruleCode(() =>
+            applyAction(provided.state, {
+              type: 'play-card',
+              playerId: active,
+              expectedRevision: provided.state.revision,
+              handCardUid: provided.uid,
+            }),
+          ),
+        ).toBe('AOE_REQUIRES_LANE');
+      },
+    );
+  });
+
+  it('rejects a lane-target power played without a lane (INVALID_TARGET)', () => {
+    let state = game(53);
+    const active = state.activePlayerId;
+    state = setActive(state, active);
+    const provided = giveCard(state, active, 'power-scorch');
+    expect(
+      ruleCode(() =>
+        applyAction(provided.state, {
+          type: 'play-card',
+          playerId: active,
+          expectedRevision: provided.state.revision,
+          handCardUid: provided.uid,
+        }),
+      ),
+    ).toBe('INVALID_TARGET');
+  });
+
+  it('rejects an add-card effect referencing an unknown cardId (UNKNOWN_CARD)', () => {
+    withFakeCard(
+      {
+        id: 'test-salvage-bad',
+        name: 'Bad Salvage',
+        kind: 'power',
+        faction: 'universal',
+        tier: 1,
+        cost: 1,
+        description: 'test',
+        target: 'none',
+        effects: [{ type: 'add-card', cardId: 'no-such-card' }],
+      },
+      () => {
+        let state = game(55);
+        const active = state.activePlayerId;
+        state = setActive(state, active);
+        const provided = giveCard(state, active, 'test-salvage-bad');
+        expect(
+          ruleCode(() =>
+            applyAction(provided.state, {
+              type: 'play-card',
+              playerId: active,
+              expectedRevision: provided.state.revision,
+              handCardUid: provided.uid,
+            }),
+          ),
+        ).toBe('UNKNOWN_CARD');
+      },
+    );
+  });
+
+  it('rejects destroy-unit when the target lane has no enemy unit (INVALID_TARGET)', () => {
+    let state = game(54);
+    const active = state.activePlayerId;
+    state = setActive(state, active);
+    const provided = giveCard(state, active, 'power-execution');
+    expect(
+      ruleCode(() =>
+        applyAction(provided.state, {
+          type: 'play-card',
+          playerId: active,
+          expectedRevision: provided.state.revision,
+          handCardUid: provided.uid,
+          laneIndex: 0,
+        }),
+      ),
+    ).toBe('INVALID_TARGET');
+  });
+});
+
+describe('phase B catalog coverage (B-4)', () => {
+  it('adds 8+ new cards and uses at least 5 of the 7 new primitives', () => {
+    const used = new Set<string>();
+    for (const card of CARD_CATALOG) {
+      const effects: readonly Effect[] =
+        card.kind === 'power' ? card.effects : card.kind === 'unit' && card.special ? card.special.effects : [];
+      for (const effect of effects) used.add(effect.type);
+    }
+    const primitives = ['debuff-unit', 'dot', 'aoe', 'add-card', 'gain-mana', 'heal-hero', 'destroy-unit'];
+    const usedPrimitives = primitives.filter((p) => used.has(p));
+    expect(usedPrimitives.length).toBeGreaterThanOrEqual(5);
+
+    const newIds = [
+      'power-venom',
+      'power-rot',
+      'power-scorch',
+      'power-mend',
+      'power-overcharge',
+      'power-salvage',
+      'power-execution',
+      'power-wither',
+      'antlion-spitter',
+      'rebel-engineer',
+      'combine-drone',
+    ];
+    for (const id of newIds) expect(CARD_BY_ID.has(id)).toBe(true);
   });
 });

@@ -8,4 +8,5 @@ coverage/
 .env.*
 !.env.example
 .opencode/NIGHT_STATUS.md
+.opencode/browser-check/
 .playwright-mcp/

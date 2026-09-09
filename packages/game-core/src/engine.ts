@@ -1,4 +1,4 @@
-import { CARD_CATALOG, getCard } from './cards';
+import { CARD_BY_ID, CARD_CATALOG, getCard } from './cards';
 import { shuffle } from './random';
 import {
   BuildingCardDefinition,
@@ -92,7 +92,21 @@ function startTurn(state: GameState, playerId: PlayerId): void {
 
   for (const lane of state.lanes) {
     const side = lane.sides[playerId];
-    if (side.unit) side.unit.turnsSurvived += 1;
+    if (!side.unit) continue;
+    side.unit.turnsSurvived += 1;
+    // Dot tick: one slot per unit, applied at the start of the owner's turn,
+    // before this player's combat. A new dot REPLACES any existing dot — dots
+    // never stack. Dot damage kills at 0 like normal damage.
+    if (side.unit.dot) {
+      side.unit.health -= side.unit.dot.amount;
+      addLog(state, `${getCard(side.unit.cardId).name} suffers ${side.unit.dot.amount} dot damage in lane ${lane.index + 1}.`);
+      if (side.unit.dot.turns <= 1) side.unit.dot = undefined;
+      else side.unit.dot.turns -= 1;
+      if (side.unit.health <= 0) {
+        addLog(state, `${getCard(side.unit.cardId).name} is destroyed in lane ${lane.index + 1}.`);
+        side.unit = null;
+      }
+    }
     if (side.building && side.unit) {
       const building = getCard(side.building.cardId);
       if (
@@ -204,6 +218,75 @@ function applyEffects(
         target.unit.health += effect.health;
         break;
       }
+      case 'debuff-unit': {
+        const resolvedTarget =
+          targetKind === 'self' ? 'self' : targetKind === 'enemy-unit' ? 'enemy-unit' : 'friendly-unit';
+        if (targetKind !== 'self' && targetKind !== 'enemy-unit' && targetKind !== 'friendly-unit') {
+          fail('INVALID_EFFECT_TARGET', 'Debuff requires a unit target.');
+        }
+        const target = targetUnit(state, actorId, resolvedTarget, sourceLaneIndex, targetLaneIndex);
+        target.unit.attack = Math.max(0, target.unit.attack - effect.attack);
+        target.unit.health -= effect.health;
+        addLog(state, `${getCard(target.unit.cardId).name} loses ${effect.attack} ATK and ${effect.health} HP in lane ${target.lane.index + 1}.`);
+        removeDeadUnit(state, target.lane, target.ownerId);
+        break;
+      }
+      case 'dot': {
+        const resolvedTarget =
+          targetKind === 'self' ? 'self' : targetKind === 'enemy-unit' ? 'enemy-unit' : 'friendly-unit';
+        if (targetKind !== 'self' && targetKind !== 'enemy-unit' && targetKind !== 'friendly-unit') {
+          fail('INVALID_EFFECT_TARGET', 'Dot requires a unit target.');
+        }
+        const target = targetUnit(state, actorId, resolvedTarget, sourceLaneIndex, targetLaneIndex);
+        // One dot slot per unit: assigning here replaces any existing dot.
+        target.unit.dot = { amount: effect.amount, turns: effect.turns };
+        addLog(state, `${getCard(target.unit.cardId).name} is poisoned: ${effect.amount} damage for ${effect.turns} turns.`);
+        break;
+      }
+      case 'aoe': {
+        if (targetKind !== 'lane') fail('INVALID_EFFECT_TARGET', 'AOE requires a lane target.');
+        const lane = getLane(state, targetLaneIndex);
+        for (const ownerId of [actorId, enemyId]) {
+          const unit = lane.sides[ownerId].unit;
+          if (unit) {
+            unit.health -= effect.amount;
+            removeDeadUnit(state, lane, ownerId);
+          }
+        }
+        addLog(state, `${effect.amount} damage hits both sides of lane ${lane.index + 1}.`);
+        break;
+      }
+      case 'add-card': {
+        const added = CARD_BY_ID.get(effect.cardId);
+        if (!added) fail('UNKNOWN_CARD', `Unknown card id in effect: ${effect.cardId}.`);
+        const player = state.players[actorId];
+        if (player.hand.length >= state.config.handCap) {
+          addLog(state, `${player.name}'s hand is full; ${added.name} was not added.`);
+        } else {
+          player.hand.push({ uid: uid(state, 'card'), cardId: added.id });
+          addLog(state, `${player.name} adds ${added.name} to their hand.`);
+        }
+        break;
+      }
+      case 'gain-mana': {
+        const player = state.players[actorId];
+        const gained = Math.min(effect.amount, Math.max(0, player.maxMana - player.mana));
+        player.mana += gained;
+        addLog(
+          state,
+          gained > 0
+            ? `${player.name} gains ${gained} mana.`
+            : `${player.name} has no room to gain mana.`,
+        );
+        break;
+      }
+      case 'heal-hero': {
+        const player = state.players[actorId];
+        const healed = Math.min(effect.amount, Math.max(0, state.config.startingHp - player.hp));
+        player.hp += healed;
+        addLog(state, `${player.name} restores ${healed} hero HP.`);
+        break;
+      }
       case 'draw': {
         for (let i = 0; i < effect.amount; i += 1) drawOne(state, state.players[actorId]);
         break;
@@ -215,6 +298,17 @@ function applyEffects(
         const lane = getLane(state, targetLaneIndex ?? sourceLaneIndex);
         if (!lane.sides[enemyId].building) fail('INVALID_TARGET', 'No enemy building in target lane.');
         lane.sides[enemyId].building = null;
+        break;
+      }
+      case 'destroy-unit': {
+        const resolvedTarget =
+          targetKind === 'self' ? 'self' : targetKind === 'enemy-unit' ? 'enemy-unit' : 'friendly-unit';
+        if (targetKind !== 'self' && targetKind !== 'enemy-unit' && targetKind !== 'friendly-unit') {
+          fail('INVALID_EFFECT_TARGET', 'Destroy unit requires a unit target.');
+        }
+        const target = targetUnit(state, actorId, resolvedTarget, sourceLaneIndex, targetLaneIndex);
+        target.unit.health = 0;
+        removeDeadUnit(state, target.lane, target.ownerId);
         break;
       }
       default: {
@@ -234,7 +328,7 @@ function playUnit(
   const lane = getLane(state, laneIndex);
   if (lane.sides[playerId].unit) fail('SLOT_OCCUPIED', 'That lane already has your unit.');
   if (card.faction !== 'universal' && card.faction !== lane.type) {
-    fail('WRONG_LANE_TYPE', `${card.name} must be played on a ${card.faction} lane.`);
+    fail('WRONG_LANE_TYPE', `${card.name} must be played on ${/^[aeiou]/i.test(card.faction) ? 'an' : 'a'} ${card.faction} lane.`);
   }
   lane.sides[playerId].unit = {
     uid: uid(state, 'unit'),
@@ -257,9 +351,23 @@ function playBuilding(
   const lane = getLane(state, laneIndex);
   if (lane.sides[playerId].building) fail('SLOT_OCCUPIED', 'That lane already has your building.');
   if (card.faction !== 'universal' && card.faction !== lane.type) {
-    fail('WRONG_LANE_TYPE', `${card.name} must be played on a ${card.faction} lane.`);
+    fail('WRONG_LANE_TYPE', `${card.name} must be played on ${/^[aeiou]/i.test(card.faction) ? 'an' : 'a'} ${card.faction} lane.`);
   }
   lane.sides[playerId].building = { uid: uid(state, 'building'), cardId: card.id, ownerId: playerId };
+}
+
+/**
+ * Play-time validation of effect payloads. The catalog is static, so this is a
+ * defense-in-depth check (a corrupted/extended card can never smuggle a bad
+ * `add-card` reference past the engine): it must run BEFORE any effect is
+ * applied or resources spent, so failures stay atomic.
+ */
+function validateEffects(effects: readonly Effect[]): void {
+  for (const effect of effects) {
+    if (effect.type === 'add-card' && !CARD_BY_ID.has(effect.cardId)) {
+      fail('UNKNOWN_CARD', `Unknown card id in effect: ${effect.cardId}.`);
+    }
+  }
 }
 
 function playPower(
@@ -271,6 +379,12 @@ function playPower(
   if (card.faction !== 'universal' && !state.config.laneTypes.includes(card.faction)) {
     fail('WRONG_LANE_TYPE', 'Power faction is not present in this match.');
   }
+  if (card.effects.some((effect) => effect.type === 'aoe') && card.target !== 'lane') {
+    fail('AOE_REQUIRES_LANE', 'AOE powers must declare a lane target.');
+  }
+  validateEffects(card.effects);
+  // 'lane' (and every other target except 'none'/'enemy-hero') requires a lane:
+  // getLane fails with INVALID_TARGET when targetLaneIndex is missing.
   if (card.target !== 'none' && card.target !== 'enemy-hero') getLane(state, targetLaneIndex);
   applyEffects(state, playerId, card.effects, card.target, targetLaneIndex ?? 0, targetLaneIndex);
 }
@@ -302,6 +416,7 @@ function handleSpecial(state: GameState, action: Extract<GameAction, { type: 'ac
   if (card.kind !== 'unit' || !card.special) fail('NO_SPECIAL', 'That unit has no special ability.');
   if (unit.turnsSurvived < 1) fail('SPECIAL_NOT_READY', 'Unit must survive at least one turn.');
   if (unit.specialUsesRemaining <= 0) fail('SPECIAL_EXHAUSTED', 'No special uses remaining.');
+  validateEffects(card.special.effects);
   const player = state.players[action.playerId];
   if (player.mana < card.special.cost) fail('INSUFFICIENT_MANA', 'Not enough mana for special.');
 

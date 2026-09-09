@@ -25,8 +25,15 @@ export type Effect =
   | { type: 'damage-hero'; amount: number }
   | { type: 'heal-unit'; amount: number }
   | { type: 'buff-unit'; attack: number; health: number }
+  | { type: 'debuff-unit'; attack: number; health: number }
+  | { type: 'dot'; amount: number; turns: number }
+  | { type: 'aoe'; amount: number }
+  | { type: 'add-card'; cardId: string }
+  | { type: 'gain-mana'; amount: number }
+  | { type: 'heal-hero'; amount: number }
   | { type: 'draw'; amount: number }
-  | { type: 'destroy-building' };
+  | { type: 'destroy-building' }
+  | { type: 'destroy-unit' };
 
 export interface SpecialDefinition {
   name: string;
@@ -75,7 +82,7 @@ export interface PowerCardDefinition {
   tier: number;
   cost: number;
   description: string;
-  target: 'friendly-unit' | 'enemy-unit' | 'enemy-hero' | 'enemy-building' | 'none';
+  target: 'friendly-unit' | 'enemy-unit' | 'enemy-hero' | 'enemy-building' | 'lane' | 'none';
   effects: readonly Effect[];
 }
 
@@ -95,6 +102,12 @@ export interface UnitInstance {
   maxHealth: number;
   turnsSurvived: number;
   specialUsesRemaining: number;
+  /**
+   * Single damage-over-time slot. Ticks at the START of the unit owner's turn
+   * (before that player's combat) for `turns` ticks. Applying a new dot
+   * REPLACES this slot — dots never stack.
+   */
+  dot?: { amount: number; turns: number };
 }
 
 export interface BuildingInstance {
