@@ -12,6 +12,9 @@ import {
   GameState,
   setPlayerConnected,
   toClientView,
+  DEFAULT_LANE_TYPES,
+  LANE_TYPES,
+  LaneType,
 } from '@qcw/game-core';
 
 /** Placeholder socket id for the solo AI seat (never matches a real socket). */
@@ -31,12 +34,16 @@ export interface Room {
   players: RoomPlayer[];
   game: GameState | null;
   seed?: number;
+  /** END-1 — the room's four lane types (creator selection, validated, canonical order). */
+  laneTypes: LaneType[];
 }
 
 export interface RoomView {
   code: string;
   players: Array<{ id: string; name: string; connected: boolean }>;
   started: boolean;
+  /** END-1 — the room's four lane types (canonical pool order). */
+  laneTypes: LaneType[];
 }
 
 /** Default rejoin grace window (SPEC "Room lifecycle"): 120 seconds. */
@@ -85,7 +92,12 @@ export class GameService {
     rawName: string,
     seed?: number,
     solo?: boolean,
+    rawLaneTypes?: unknown,
   ): { room: Room; playerId: string; token: string } {
+    // Validate before touching the caller's current session so a bad payload
+    // can never strand them in a dropped room.
+    const laneTypes =
+      rawLaneTypes === undefined ? [...DEFAULT_LANE_TYPES] : this.assertLaneTypes(rawLaneTypes);
     this.leaveBySocket(socketId);
     const code = this.generateRoomCode();
     const playerId = this.generatePlayerId();
@@ -94,6 +106,7 @@ export class GameService {
       players: [{ playerId, socketId, name: this.cleanName(rawName), connected: true }],
       game: null,
       seed: seed ?? undefined,
+      laneTypes,
     };
     if (solo) {
       // Solo match: fill the second seat with the AI and start immediately.
@@ -454,7 +467,30 @@ export class GameService {
         connected: player.connected,
       })),
       started: Boolean(room.game),
+      laneTypes: room.laneTypes,
     };
+  }
+
+  /**
+   * END-1 — a room selection is exactly 4 distinct members of the 6-type lane
+   * pool. Client data is untrusted: this is the server-side gate (the engine
+   * re-validates in `createGame`). Returns the selection in canonical pool
+   * order.
+   */
+  private assertLaneTypes(raw: unknown): LaneType[] {
+    if (!Array.isArray(raw) || raw.length !== 4) {
+      throw new GameRuleError('INVALID_LANE_TYPES', 'Choose exactly 4 lane types.');
+    }
+    const pool = new Set<string>(LANE_TYPES);
+    const seen = new Set<string>();
+    for (const value of raw) {
+      if (typeof value !== 'string' || !pool.has(value)) {
+        throw new GameRuleError('INVALID_LANE_TYPES', `Unknown lane type: ${String(value)}.`);
+      }
+      if (seen.has(value)) throw new GameRuleError('INVALID_LANE_TYPES', `Duplicate lane type: ${value}.`);
+      seen.add(value);
+    }
+    return LANE_TYPES.filter((type) => seen.has(type)) as LaneType[];
   }
 
   gameView(room: Room, playerId: string): ClientGameView | null {
@@ -540,27 +576,30 @@ export class GameService {
 
     const [a, b] = room.players;
     if (!a || !b) throw new GameRuleError('INVALID_STATE', 'Rematch requires two active players.');
-    room.game = createGame({
-      roomCode: room.code,
-      players: [
-        { id: a.playerId, name: a.name },
-        { id: b.playerId, name: b.name },
-      ],
-      seed: room.seed,
-    });
+    room.game = this.startGame(room);
     this.rematchRequests.delete(room.code);
     return room;
   }
 
   private startIfReady(room: Room): void {
     if (room.players.length !== 2 || room.game) return;
-    room.game = createGame({
+    room.game = this.startGame(room);
+  }
+
+  /**
+   * Fresh deterministic game for a room. END-1: the room's stored lane
+   * selection is the single source of truth (rematches keep it), so neither
+   * the client nor a default can drift the lane layout between matches.
+   */
+  private startGame(room: Room): GameState {
+    return createGame({
       roomCode: room.code,
       players: [
         { id: room.players[0].playerId, name: room.players[0].name },
         { id: room.players[1].playerId, name: room.players[1].name },
       ],
       seed: room.seed,
+      config: { laneTypes: room.laneTypes },
     });
   }
 

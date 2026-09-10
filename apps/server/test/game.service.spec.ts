@@ -78,6 +78,89 @@ describe('GameService rooms', () => {
   });
 });
 
+describe('GameService lane selection (END-1)', () => {
+  it('defaults to the classic four lanes when no selection is supplied', () => {
+    const service = new GameService();
+    const created = service.createRoom('s1', 'Alice');
+    expect(created.room.laneTypes).toEqual(['antlion', 'combine', 'rebel', 'zombie']);
+    service.joinRoom('s2', created.room.code, 'Bob');
+    expect(service.roomForSocket('s1')!.game!.lanes.map((lane) => lane.type)).toEqual([
+      'antlion',
+      'combine',
+      'rebel',
+      'zombie',
+    ]);
+  });
+
+  it('stores a valid custom selection in canonical pool order and starts the game with it', () => {
+    const service = new GameService();
+    // Deliberately out-of-pool-order input.
+    const created = service.createRoom('s1', 'Alice', undefined, false, ['wraith', 'guardian', 'combine', 'antlion']);
+    expect(created.room.laneTypes).toEqual(['antlion', 'combine', 'guardian', 'wraith']);
+    const view = service.roomView(created.room);
+    expect(view.laneTypes).toEqual(['antlion', 'combine', 'guardian', 'wraith']);
+    service.joinRoom('s2', created.room.code, 'Bob');
+    expect(service.roomForSocket('s1')!.game!.lanes.map((lane) => lane.type)).toEqual([
+      'antlion',
+      'combine',
+      'guardian',
+      'wraith',
+    ]);
+  });
+
+  it('rejects selections that are not exactly 4 distinct pool members', () => {
+    const bad = [
+      ['antlion', 'combine', 'rebel'], // too few
+      ['antlion', 'combine', 'rebel', 'zombie', 'wraith'], // too many
+      ['antlion', 'antlion', 'rebel', 'zombie'], // duplicate
+      ['antlion', 'combine', 'rebel', 'gmod'], // unknown type
+      'antlion', // not an array
+      ['antlion', 'combine', 'rebel', null], // non-string entry
+    ];
+    for (const laneTypes of bad) {
+      const service = new GameService();
+      const error = ruleErrorOf(() => service.createRoom('s1', 'Alice', undefined, false, laneTypes));
+      expect(error.code).toBe('INVALID_LANE_TYPES');
+    }
+  });
+
+  it('does not disturb the caller\'s current room when the selection is invalid', () => {
+    const service = new GameService();
+    const first = service.createRoom('s1', 'Alice');
+    service.joinRoom('s2', first.room.code, 'Bob');
+    expect(() => service.createRoom('s1', 'Alice', undefined, false, ['antlion', 'antlion', 'rebel', 'zombie'])).toThrowError(
+      GameRuleError,
+    );
+    // s1 is still in the original room, still a player, game untouched.
+    const room = service.roomForSocket('s1')!;
+    expect(room.code).toBe(first.room.code);
+    expect(service.playerForSocket('s1')).not.toBeNull();
+    expect(room.game).not.toBeNull();
+  });
+
+  it('keeps the room lane selection across rematches', () => {
+    const service = new GameService();
+    const created = service.createRoom('s1', 'Alice', undefined, false, ['antlion', 'combine', 'guardian', 'wraith']);
+    service.joinRoom('s2', created.room.code, 'Bob');
+    const room = service.roomForSocket('s1')!;
+    // Simulate a finished match, then both players rematch.
+    room.game!.status = 'finished';
+    room.game!.winnerId = created.playerId;
+    service.rematch('s1');
+    const after = service.rematch('s2');
+    expect(after.game!.status).toBe('playing');
+    expect(after.game!.lanes.map((lane) => lane.type)).toEqual(['antlion', 'combine', 'guardian', 'wraith']);
+  });
+
+  it('starts solo rooms with the selected lanes', () => {
+    const service = new GameService();
+    const created = service.createRoom('s1', 'Alice', undefined, true, ['guardian', 'wraith', 'rebel', 'zombie']);
+    expect(created.room.game).not.toBeNull();
+    expect(created.room.game!.lanes.map((lane) => lane.type)).toEqual(['rebel', 'zombie', 'guardian', 'wraith']);
+    expect(created.room.players.find((seat) => seat.ai)?.name).toBe(AI_PLAYER_NAME);
+  });
+});
+
 describe('GameService rejoin grace (P1-04)', () => {
   it('defaults to a 120 second grace window', () => {
     expect(DEFAULT_REJOIN_GRACE_MS).toBe(120_000);
@@ -467,7 +550,7 @@ describe('GameService rejoin grace (P1-04)', () => {
 
   it('solo: a single rematch confirmation starts a fresh game (AI auto-rematches)', () => {
     const service = new GameService();
-    const created = service.createRoom('s1', 'Alice', 42, true);
+    const created = service.createRoom('s1', 'Alice', 42, true, ['guardian', 'wraith', 'rebel', 'zombie']);
     const room = service.roomForSocket('s1')!;
     // Simulate a finished match.
     room.game!.status = 'finished';
@@ -478,6 +561,8 @@ describe('GameService rejoin grace (P1-04)', () => {
     expect(after.game!.revision).toBe(0);
     expect(after.game!.players).toHaveProperty(created.playerId);
     expect(after.game!.players).toHaveProperty(service.aiSeat(after)!.playerId);
+    // END-1: the room's lane selection survives the rematch (canonical order).
+    expect(after.game!.lanes.map((lane) => lane.type)).toEqual(['rebel', 'zombie', 'guardian', 'wraith']);
   });
 
   it('finished-room leave clears the other seat\'s session records (no leak)', async () => {

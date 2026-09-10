@@ -21,6 +21,10 @@ export const FACTION_THEME: Record<Faction, FactionTheme> = {
   rebel: { accent: '#e8564f', glow: '#e8564f45' },
   // sickly green — the dead
   zombie: { accent: '#74c96e', glow: '#74c96e45' },
+  // teal — wardens and shrines
+  guardian: { accent: '#58c9b9', glow: '#58c9b945' },
+  // magenta — phasing void
+  wraith: { accent: '#c86ad9', glow: '#c86ad945' },
   // violet/silver — faction-agnostic
   universal: { accent: '#a98ae8', glow: '#a98ae845' },
 };

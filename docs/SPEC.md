@@ -6,8 +6,10 @@ This spec resolves unknown original details into explicit, testable web defaults
 ## Match constants (baseline)
 
 - Players: 2
-- Lanes: 4 mirrored lanes
-- Default lane order: Antlion, Combine, Rebel, Zombie
+- Lanes: 4 mirrored lanes, chosen at room creation from a six-type pool (END-1)
+- Lane pool: Antlion, Combine, Rebel, Zombie, Guardian, Wraith
+- Default selection (no selection supplied): the classic four — Antlion, Combine, Rebel, Zombie; the board is
+  always laid out in canonical pool order
 - Starting HP: 30 (web default; not claimed original)
 - Mana cap: 10 (web default; not claimed original)
 - Starting hand: 4
@@ -19,6 +21,11 @@ This spec resolves unknown original details into explicit, testable web defaults
 - Deck exhaustion: draw a `Bucket` fallback rather than fatigue damage for baseline fidelity to the fallback idea.
 
 ## Lane model
+
+The room creator picks exactly 4 of the 6 lane types in the pool (server-validated; an invalid selection — wrong
+count, unknown type, or duplicate — is rejected with `INVALID_LANE_TYPES`). The engine re-validates in
+`createGame` and normalizes the selection to canonical pool order. Rematches in a room keep the same selection.
+Decks are built from universal cards plus cards of the four selected factions.
 
 Each lane has one shared type and two sides. Each player may have at most:
 

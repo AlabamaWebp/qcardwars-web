@@ -362,6 +362,40 @@ async function specSoloAi(browser) {
   await page.goto(APP_URL, { waitUntil: 'domcontentloaded' });
   await waitSel(page, 'qcw-lobby .connection.online');
   await page.type('qcw-lobby label input', 'Dan');
+
+  // END-1 — lane picker: swap the default antlion lane for wraith.
+  const toggleLane = (label) =>
+    page.evaluate((text) => {
+      const chip = [...document.querySelectorAll('qcw-lobby .lane-chip')].find(
+        (c) => (c.textContent ?? '').trim().toLowerCase() === text,
+      );
+      if (!chip) throw new Error(`lane chip "${text}" not found`);
+      chip.click();
+    }, label);
+  // Wait for the rendered count instead of reading it immediately: the
+  // synthetic chip.click() updates the signal synchronously, but Angular's
+  // change detection can land on a microtask after the evaluate round-trip.
+  const readCount = () => textOf(page, 'qcw-lobby .lane-heading .count');
+  const expectCount = async (expected, label) => {
+    try {
+      await page.waitForFunction(
+        (exp) => (document.querySelector('qcw-lobby .lane-heading .count')?.textContent ?? '').includes(exp),
+        { timeout: 5000 },
+        expected,
+      );
+    } catch {
+      fail(`${label}: expected ${expected}, saw "${(await readCount()).trim()}"`);
+    }
+  };
+  // At 4/4 selecting a fifth lane is ignored.
+  await toggleLane('wraith');
+  await expectCount('4/4', 'picker should hold at 4/4 when selecting a fifth lane');
+  // Deselect antlion (4→3), then select wraith (3→4).
+  await toggleLane('antlion');
+  await expectCount('3/4', 'after deselecting antlion');
+  await toggleLane('wraith');
+  await expectCount('4/4', 'after selecting wraith');
+
   await page.evaluate(() => {
     const btn = [...document.querySelectorAll('qcw-lobby .create-row button')].find((b) => /solo/i.test(b.textContent ?? ''));
     if (!btn) throw new Error('solo button not found');
@@ -370,6 +404,14 @@ async function specSoloAi(browser) {
   await waitSel(page, 'qcw-game .board');
   const oppName = await textOf(page, 'qcw-game .opponent.playerbar b');
   if (!/ai/i.test(oppName)) fail(`expected the AI opponent bar, saw "${oppName}"`);
+
+  // The board reflects the selection: a wraith lane exists, antlion is gone.
+  const laneNames = await page.$$eval('qcw-game .lane .lane-name', (nodes) =>
+    nodes.map((n) => (n.textContent ?? '').trim().toLowerCase()),
+  );
+  if (laneNames.length !== 4) fail(`expected 4 lanes, saw: ${laneNames.join(', ')}`);
+  if (!laneNames.some((n) => n.startsWith('wraith'))) fail(`expected a wraith lane on the board, saw: ${laneNames.join(', ')}`);
+  if (laneNames.some((n) => n.startsWith('antlion'))) fail(`antlion lane should have been swapped out: ${laneNames.join(', ')}`);
 
   // Hand the AI the turn (if it is ours), then observe for AI activity with
   // zero further human input.

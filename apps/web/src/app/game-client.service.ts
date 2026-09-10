@@ -1,5 +1,5 @@
 import { Injectable, computed, signal } from '@angular/core';
-import { ClientAction, ClientGameView, PlayerId } from '@qcw/game-core';
+import { ClientAction, ClientGameView, LaneType, PlayerId } from '@qcw/game-core';
 import { io, Socket } from 'socket.io-client';
 
 /**
@@ -92,6 +92,8 @@ export interface RoomView {
   code: string;
   players: Array<{ id: string; name: string; connected: boolean }>;
   started: boolean;
+  /** END-1 — the room's four lane types (canonical pool order). */
+  laneTypes: LaneType[];
 }
 
 export interface ServerErrorView {
@@ -250,9 +252,13 @@ export class GameClientService {
     });
   }
 
-  createRoom(name: string, solo = false) {
+  /**
+   * END-1 — `laneTypes` is the creator's 4-of-6 selection. When omitted the
+   * server falls back to the classic four lanes (backward compatible).
+   */
+  createRoom(name: string, solo = false, laneTypes?: LaneType[]) {
     this.error.set(null);
-    this.socket.emit('room:create', { name, solo });
+    this.socket.emit('room:create', { name, solo, laneTypes });
   }
 
   joinRoom(code: string, name: string) {

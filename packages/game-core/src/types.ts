@@ -1,4 +1,9 @@
-export const LANE_TYPES = ['antlion', 'combine', 'rebel', 'zombie'] as const;
+/**
+ * END-1 — the pool of selectable lane types. A match uses exactly 4 of these
+ * (chosen by the room creator); the canonical lane order is this array
+ * filtered to the selected set.
+ */
+export const LANE_TYPES = ['antlion', 'combine', 'rebel', 'zombie', 'guardian', 'wraith'] as const;
 export type LaneType = (typeof LANE_TYPES)[number];
 export type Faction = LaneType | 'universal';
 export type CardKind = 'unit' | 'building' | 'power';
@@ -12,12 +17,19 @@ export interface GameConfig {
   laneTypes: readonly LaneType[];
 }
 
+/**
+ * END-1 — the default lane selection (the classic four). A match always runs
+ * exactly 4 lanes; the room creator picks which 4 of the 6-pool, and this is
+ * the fallback when no selection is supplied.
+ */
+export const DEFAULT_LANE_TYPES: readonly LaneType[] = ['antlion', 'combine', 'rebel', 'zombie'];
+
 export const DEFAULT_GAME_CONFIG: GameConfig = {
   startingHp: 30,
   manaCap: 10,
   startingHand: 4,
   handCap: 10,
-  laneTypes: LANE_TYPES,
+  laneTypes: DEFAULT_LANE_TYPES,
 };
 
 export type Effect =

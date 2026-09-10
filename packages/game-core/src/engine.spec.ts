@@ -8,6 +8,8 @@ import {
   setPlayerConnected,
   GameRuleError,
   toClientView,
+  LANE_TYPES,
+  LaneType,
   CardDefinition,
   Effect,
 } from './index';
@@ -1104,21 +1106,24 @@ describe('catalog coverage (B-4, updated for Phase C)', () => {
     return [];
   }
 
-  it('stays in the 55-60 card window with no faction below 10 cards', () => {
-    expect(CARD_CATALOG.length).toBeGreaterThanOrEqual(55);
-    expect(CARD_CATALOG.length).toBeLessThanOrEqual(60);
-    for (const faction of ['antlion', 'combine', 'rebel', 'zombie']) {
-      expect(CARD_CATALOG.filter((card) => card.faction === faction).length).toBeGreaterThanOrEqual(10);
+  it('stays in the 70-75 card window with no faction below 6 cards', () => {
+    expect(CARD_CATALOG.length).toBeGreaterThanOrEqual(70);
+    expect(CARD_CATALOG.length).toBeLessThanOrEqual(75);
+    for (const faction of LANE_TYPES) {
+      expect(
+        CARD_CATALOG.filter((card) => card.faction === faction).length,
+        `${faction} should have 6+ cards`,
+      ).toBeGreaterThanOrEqual(6);
     }
     const universals = CARD_CATALOG.filter((card) => card.faction === 'universal').length;
     expect(universals).toBeGreaterThanOrEqual(11);
     expect(universals).toBeLessThanOrEqual(13);
   });
 
-  it('has 8+ buildings, at least one per faction lane, and costs spanning 1-8', () => {
+  it('has 10+ buildings, at least one per lane type, and costs spanning 1-8', () => {
     const buildings = CARD_CATALOG.filter((card) => card.kind === 'building');
-    expect(buildings.length).toBeGreaterThanOrEqual(8);
-    for (const faction of ['antlion', 'combine', 'rebel', 'zombie']) {
+    expect(buildings.length).toBeGreaterThanOrEqual(10);
+    for (const faction of LANE_TYPES) {
       expect(buildings.some((card) => card.faction === faction)).toBe(true);
     }
     const costs = new Set(CARD_CATALOG.map((card) => card.cost));
@@ -1323,5 +1328,163 @@ describe('Phase D D-2: match summary stats', () => {
     expect(state.stats.p2.unitsDestroyed).toBe(0);
     // p1's aoe did not destroy any enemy unit (p2's survived), so no kill credit.
     expect(state.stats.p1.unitsDestroyed).toBe(0);
+  });
+});
+
+describe('selectable lanes (END-1)', () => {
+  function gameWithLanes(seed: number, laneTypes: readonly string[]): ReturnType<typeof game> {
+    return createGame({
+      roomCode: 'END1',
+      players: [
+        { id: 'p1', name: 'Alice' },
+        { id: 'p2', name: 'Bob' },
+      ],
+      seed,
+      config: { laneTypes: laneTypes as readonly LaneType[] },
+    });
+  }
+
+  it('defaults to the classic four lanes when no selection is supplied', () => {
+    expect(game(7).lanes.map((lane) => lane.type)).toEqual(['antlion', 'combine', 'rebel', 'zombie']);
+  });
+
+  it('builds lanes in canonical pool order for an arbitrary 4-of-6 selection', () => {
+    const state = gameWithLanes(7, ['wraith', 'guardian', 'combine', 'antlion']);
+    expect(state.lanes.map((lane) => lane.type)).toEqual(['antlion', 'combine', 'guardian', 'wraith']);
+  });
+
+  it('rejects lane selections that are not exactly 4 distinct pool members', () => {
+    const bad = [
+      ['antlion', 'combine', 'rebel'], // too few
+      ['antlion', 'combine', 'rebel', 'zombie', 'wraith'], // too many
+      ['antlion', 'antlion', 'rebel', 'zombie'], // duplicate
+      ['antlion', 'combine', 'rebel', 'gmod'], // unknown type
+    ];
+    for (const laneTypes of bad) {
+      expect(
+        ruleCode(() =>
+          createGame({
+            roomCode: 'BAD',
+            players: [
+              { id: 'p1', name: 'A' },
+              { id: 'p2', name: 'B' },
+            ],
+            seed: 3,
+            config: { laneTypes: laneTypes as readonly LaneType[] },
+          }),
+        ),
+      ).toBe('INVALID_LANE_TYPES');
+    }
+  });
+
+  it('decks contain only cards whose faction is universal or a selected lane', () => {
+    const state = gameWithLanes(11, ['antlion', 'combine', 'guardian', 'wraith']);
+    const selected = new Set<string>(['antlion', 'combine', 'guardian', 'wraith']);
+    for (const playerId of ['p1', 'p2']) {
+      for (const handCard of [...state.players[playerId].deck, ...state.players[playerId].hand]) {
+        const faction = CARD_BY_ID.get(handCard.cardId)!.faction;
+        expect(faction === 'universal' || selected.has(faction)).toBe(true);
+      }
+    }
+  });
+
+  it('draws the new factions into decks when their lanes are selected', () => {
+    const state = gameWithLanes(11, ['antlion', 'combine', 'guardian', 'wraith']);
+    const factions = new Set(
+      [
+        ...state.players.p1.deck,
+        ...state.players.p1.hand,
+        ...state.players.p2.deck,
+        ...state.players.p2.hand,
+      ].map((handCard) => CARD_BY_ID.get(handCard.cardId)!.faction),
+    );
+    expect(factions.has('guardian')).toBe(true);
+    expect(factions.has('wraith')).toBe(true);
+  });
+
+  it('lets a guardian unit play only into the guardian lane', () => {
+    const state = gameWithLanes(13, ['antlion', 'combine', 'guardian', 'wraith']);
+    const active = setActive(state, 'p1');
+    const played = playCard(active, 'p1', 'guardian-priest', 2);
+    expect(played.lanes[2].sides.p1.unit?.cardId).toBe('guardian-priest');
+    const rejected = giveCard(active, 'p1', 'guardian-priest');
+    expect(
+      ruleCode(() =>
+        applyAction(rejected.state, {
+          type: 'play-card',
+          playerId: 'p1',
+          expectedRevision: rejected.state.revision,
+          handCardUid: rejected.uid,
+          laneIndex: 0, // antlion lane
+        }),
+      ),
+    ).toBe('WRONG_LANE_TYPE');
+  });
+
+  it('wraith Death Touch kills a 3-HP enemy unit in another lane', () => {
+    let state = gameWithLanes(17, ['rebel', 'zombie', 'guardian', 'wraith']);
+    state = setActive(state, 'p1');
+    state = playCard(state, 'p1', 'wraith-reaper', 3); // 3/2 in the wraith lane
+    state = endTurn(state, 'p1');
+    state = playCard(state, 'p2', 'rebel-scout', 0); // 1/3 in the rebel lane
+    state = endTurn(state, 'p2'); // p1's turn starts; reaper has survived a turn
+    state = activateSpecial(state, 'p1', 3, 0);
+    expect(state.lanes[0].sides.p2.unit).toBeNull();
+  });
+
+  it('applies every effect of a multi-effect power (Soul Theft: debuff + damage + hero heal)', () => {
+    let state = gameWithLanes(19, ['rebel', 'zombie', 'guardian', 'wraith']);
+    state = setActive(state, 'p1');
+    state = structuredClone(state);
+    state.players.p1.hp = 25;
+    state.lanes[3].sides.p2.unit = {
+      uid: 'target',
+      cardId: 'wraith-stalker',
+      ownerId: 'p2',
+      attack: 4,
+      health: 5,
+      maxHealth: 5,
+      turnsSurvived: 1,
+      specialUsesRemaining: 0,
+    };
+    state = playCard(state, 'p1', 'power-soul-theft', 3, 3);
+    const target = state.lanes[3].sides.p2.unit!;
+    expect(target.attack).toBe(3); // 4 - 1 debuff
+    expect(target.health).toBe(3); // 5 - 2 debuff damage
+    expect(state.players.p1.hp).toBe(27); // 25 + 2 hero heal
+  });
+
+  it('sacred shrine heals the guardian-lane unit at the start of its owner\'s turn', () => {
+    let state = gameWithLanes(23, ['antlion', 'combine', 'guardian', 'wraith']);
+    state = setActive(state, 'p1');
+    state = playCard(state, 'p1', 'guardian-sentinel', 2); // 1/5 in the guardian lane
+    state = playCard(state, 'p1', 'building-sacred-shrine', 2);
+    state = structuredClone(state);
+    state.lanes[2].sides.p1.unit!.health = 2;
+    state = endTurn(state, 'p1'); // p2's turn
+    state = endTurn(state, 'p2'); // p1's turn starts → shrine heals 1
+    expect(state.lanes[2].sides.p1.unit?.health).toBe(3);
+  });
+
+  it('universal cards play in any lane of any selection', () => {
+    const state = gameWithLanes(29, ['guardian', 'wraith', 'antlion', 'zombie']);
+    const played = playCard(setActive(state, 'p1'), 'p1', 'universal-mercenary', 2);
+    expect(played.lanes[2].sides.p1.unit?.cardId).toBe('universal-mercenary');
+  });
+
+  it('rejects playing a faction power whose lane is not in the match', () => {
+    const state = gameWithLanes(31, ['antlion', 'combine', 'rebel', 'zombie']);
+    const active = setActive(state, 'p1');
+    const rejected = giveCard(active, 'p1', 'power-sacred-light');
+    expect(
+      ruleCode(() =>
+        applyAction(rejected.state, {
+          type: 'play-card',
+          playerId: 'p1',
+          expectedRevision: rejected.state.revision,
+          handCardUid: rejected.uid,
+        }),
+      ),
+    ).toBe('WRONG_LANE_TYPE');
   });
 });
