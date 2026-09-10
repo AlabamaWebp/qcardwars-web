@@ -860,6 +860,74 @@ describe('phase B effect primitives', () => {
     expect(state.players.p1.hp).toBe(22);
   });
 
+  it('aoe damages units on both sides but never touches buildings or heroes (aoe vs buildings)', () => {
+    let state = game(61);
+    state = setActive(state, 'p2');
+    state = playCard(state, 'p2', 'combine-metrocop', 1); // 2/3, p2
+    state = playCard(state, 'p2', 'building-ammo-cache', 1);
+    state = endTurn(state, 'p2');
+    state = setActive(state, 'p1');
+    state = playCard(state, 'p1', 'combine-metrocop', 1);
+    state = structuredClone(state);
+    state.lanes[1].sides.p2.unit!.health = 2; // scorch (2) kills p2's, wounds p1's
+    const p1HpBefore = state.players.p1.hp;
+    const p2HpBefore = state.players.p2.hp;
+    const buildingUid = state.lanes[1].sides.p2.building!.uid;
+
+    state = playCard(state, 'p1', 'power-scorch', 1);
+    expect(state.lanes[1].sides.p1.unit?.health).toBe(1); // 3 - 2
+    expect(state.lanes[1].sides.p2.unit).toBeNull(); // 2 - 2 = 0, destroyed
+    // The lane's building survives untouched (not destroyed, not damaged).
+    expect(state.lanes[1].sides.p2.building!.uid).toBe(buildingUid);
+    expect(state.lanes[1].sides.p1.building).toBeNull();
+    // Heroes are not damaged by aoe.
+    expect(state.players.p1.hp).toBe(p1HpBefore);
+    expect(state.players.p2.hp).toBe(p2HpBefore);
+  });
+
+  it('dot tick at turn start can kill a unit before its owner combat resolves the same round (dot + combat order)', () => {
+    let state = game(60);
+    state.activePlayerId = 'p2'; // p1's turn is about to begin
+    const hpBefore = state.players.p2.hp;
+
+    // p1's lane 1: poisoned to death by this tick (2 HP - 2 dot = 0).
+    state.lanes[0].sides.p1.unit = {
+      uid: 'dot-u',
+      cardId: 'rebel-scout',
+      ownerId: 'p1',
+      attack: 4,
+      health: 2,
+      maxHealth: 3,
+      turnsSurvived: 1,
+      specialUsesRemaining: 0,
+      dot: { amount: 2, turns: 2 },
+    };
+    // p1's lane 2: unpoisoned attacker into an open lane.
+    state.lanes[1].sides.p1.unit = {
+      uid: 'atk-u',
+      cardId: 'rebel-scout',
+      ownerId: 'p1',
+      attack: 3,
+      health: 3,
+      maxHealth: 3,
+      turnsSurvived: 1,
+      specialUsesRemaining: 0,
+    };
+
+    // p2 ends: p1's turn starts → the dot ticks first (lane 1 unit dies).
+    state = endTurn(state, 'p2');
+    expect(state.lanes[0].sides.p1.unit).toBeNull(); // died to the dot tick
+    // Then p1's turn ends → combat runs with only the surviving lane 2 unit.
+    state = endTurn(state, 'p1');
+    expect(state.lanes[1].sides.p1.unit).not.toBeNull();
+    // Exact numbers: only the surviving unit dealt damage (3, not 3 + 4).
+    expect(state.players.p2.hp).toBe(hpBefore - 3);
+    // Exact order: the dot tick (start of p1's turn) precedes p1's combat.
+    const dotSeq = state.log.find((e) => /suffers 2 dot damage in lane 1/.test(e.text))!.seq;
+    const atkSeq = state.log.find((e) => /deals 3 direct damage/.test(e.text))!.seq;
+    expect(dotSeq).toBeLessThan(atkSeq);
+  });
+
   it('toClientView carries the dot slot through to the lane view (client view flow)', () => {
     let state = game(51);
     state = setActive(state, 'p2');
@@ -968,6 +1036,46 @@ describe('illegal actions (phase B)', () => {
     );
   });
 
+  it('rejects a unit special whose add-card effect references a missing id BEFORE spending (UNKNOWN_CARD atomicity)', () => {
+    const badUnit: CardDefinition = {
+      id: 'test-salvager-bad',
+      name: 'Bad Salvager',
+      kind: 'unit',
+      faction: 'universal',
+      tier: 1,
+      cost: 1,
+      description: 'test',
+      attack: 1,
+      health: 1,
+      special: {
+        name: 'Bad Salvage',
+        description: 'test',
+        cost: 2,
+        uses: 2,
+        target: 'none',
+        effects: [{ type: 'add-card', cardId: 'no-such-card' }],
+      },
+    };
+    withFakeCard(badUnit, () => {
+      let state = game(62);
+      state = setActive(state, 'p1');
+      state = playCard(state, 'p1', 'test-salvager-bad', 0); // universal → lane 0 ok
+      state = endTurn(state, 'p1');
+      state = endTurn(state, 'p2'); // unit has survived a turn
+      state = setActive(state, 'p1');
+
+      // Mana below the special's cost (2): if the engine checked resources before
+      // validating effect card ids, this would be INSUFFICIENT_MANA instead.
+      state.players.p1.mana = 1;
+      const usesBefore = state.lanes[0].sides.p1.unit!.specialUsesRemaining; // 2
+      expect(ruleCode(() => activateSpecial(state, 'p1', 0))).toBe('UNKNOWN_CARD');
+      // Atomic: the special's cost and use are NOT consumed.
+      expect(state.players.p1.mana).toBe(1);
+      expect(state.lanes[0].sides.p1.unit!.specialUsesRemaining).toBe(usesBefore);
+      expect(state.lanes[0].sides.p1.unit).not.toBeNull();
+    });
+  });
+
   it('rejects destroy-unit when the target lane has no enemy unit (INVALID_TARGET)', () => {
     let state = game(54);
     const active = state.activePlayerId;
@@ -987,19 +1095,51 @@ describe('illegal actions (phase B)', () => {
   });
 });
 
-describe('phase B catalog coverage (B-4)', () => {
-  it('adds 8+ new cards and uses at least 5 of the 7 new primitives', () => {
-    const used = new Set<string>();
-    for (const card of CARD_CATALOG) {
-      const effects: readonly Effect[] =
-        card.kind === 'power' ? card.effects : card.kind === 'unit' && card.special ? card.special.effects : [];
-      for (const effect of effects) used.add(effect.type);
-    }
-    const primitives = ['debuff-unit', 'dot', 'aoe', 'add-card', 'gain-mana', 'heal-hero', 'destroy-unit'];
-    const usedPrimitives = primitives.filter((p) => used.has(p));
-    expect(usedPrimitives.length).toBeGreaterThanOrEqual(5);
+describe('catalog coverage (B-4, updated for Phase C)', () => {
+  const PRIMITIVES = ['debuff-unit', 'dot', 'aoe', 'add-card', 'gain-mana', 'heal-hero', 'destroy-unit'];
 
-    const newIds = [
+  function cardEffects(card: CardDefinition): readonly Effect[] {
+    if (card.kind === 'power') return card.effects;
+    if (card.kind === 'unit' && card.special) return card.special.effects;
+    return [];
+  }
+
+  it('stays in the 55-60 card window with no faction below 10 cards', () => {
+    expect(CARD_CATALOG.length).toBeGreaterThanOrEqual(55);
+    expect(CARD_CATALOG.length).toBeLessThanOrEqual(60);
+    for (const faction of ['antlion', 'combine', 'rebel', 'zombie']) {
+      expect(CARD_CATALOG.filter((card) => card.faction === faction).length).toBeGreaterThanOrEqual(10);
+    }
+    const universals = CARD_CATALOG.filter((card) => card.faction === 'universal').length;
+    expect(universals).toBeGreaterThanOrEqual(11);
+    expect(universals).toBeLessThanOrEqual(13);
+  });
+
+  it('has 8+ buildings, at least one per faction lane, and costs spanning 1-8', () => {
+    const buildings = CARD_CATALOG.filter((card) => card.kind === 'building');
+    expect(buildings.length).toBeGreaterThanOrEqual(8);
+    for (const faction of ['antlion', 'combine', 'rebel', 'zombie']) {
+      expect(buildings.some((card) => card.faction === faction)).toBe(true);
+    }
+    const costs = new Set(CARD_CATALOG.map((card) => card.cost));
+    for (const cost of [1, 2, 3, 4, 5, 6, 7, 8]) expect(costs.has(cost)).toBe(true);
+  });
+
+  it('exercises all 7 Phase B primitives, each across multiple cards and factions', () => {
+    for (const primitive of PRIMITIVES) {
+      const using = CARD_CATALOG.filter((card) =>
+        cardEffects(card).some((effect) => effect.type === primitive),
+      );
+      expect(using.length, `${primitive} should be used by 2+ cards`).toBeGreaterThanOrEqual(2);
+      expect(
+        new Set(using.map((card) => card.faction)).size,
+        `${primitive} should be used across 2+ factions`,
+      ).toBeGreaterThanOrEqual(2);
+    }
+  });
+
+  it('keeps the Phase B card ids present', () => {
+    const ids = [
       'power-venom',
       'power-rot',
       'power-scorch',
@@ -1012,6 +1152,6 @@ describe('phase B catalog coverage (B-4)', () => {
       'rebel-engineer',
       'combine-drone',
     ];
-    for (const id of newIds) expect(CARD_BY_ID.has(id)).toBe(true);
+    for (const id of ids) expect(CARD_BY_ID.has(id)).toBe(true);
   });
 });

@@ -50,10 +50,12 @@ import { SoundService } from './sound.service';
                 @if (side(lane, opponentId()).unit; as unit) {
                   <button class="unit" [attr.data-unit-uid]="unit.uid" [style.--chip-accent]="chipAccent(unit.cardId)" (click)="selectTarget(lane.index, $event)">
                     <b>{{ cardName(unit.cardId) }}</b><span>ATK {{ unit.attack }} · HP {{ unit.health }}/{{ unit.maxHealth }}</span>
+                    @if (unit.dot) { <span class="dot-badge" title="Poisoned">☠ {{ unit.dot.turns }}</span> }
                     <span class="tip">
                       <span class="tip-name">{{ cardName(unit.cardId) }}</span>
                       <span class="tip-meta">{{ getDef(unit.cardId).kind }} · {{ getDef(unit.cardId).faction }} · tier {{ getDef(unit.cardId).tier }}</span>
                       <span class="tip-stats">ATK {{ unit.attack }} · HP {{ unit.health }}/{{ unit.maxHealth }}</span>
+                      @if (unit.dot) { <span class="tip-poison">Poison: {{ unit.dot.amount }} damage at the start of its owner's turn, {{ unit.dot.turns }} {{ unit.dot.turns === 1 ? 'turn' : 'turns' }} left.</span> }
                       <span class="tip-desc">{{ getDef(unit.cardId).description }}</span>
                     </span>
                   </button>
@@ -73,11 +75,13 @@ import { SoundService } from './sound.service';
                 @if (side(lane, g.selfPlayerId).unit; as unit) {
                   <button class="unit" [attr.data-unit-uid]="unit.uid" [style.--chip-accent]="chipAccent(unit.cardId)" (click)="ownUnitClick(lane.index, $event)">
                     <b>{{ cardName(unit.cardId) }}</b><span>ATK {{ unit.attack }} · HP {{ unit.health }}/{{ unit.maxHealth }}</span>
+                    @if (unit.dot) { <span class="dot-badge" title="Poisoned">☠ {{ unit.dot.turns }}</span> }
                     @if (specialLabel(unit.cardId); as label) { <small>{{ label }} · survived {{ unit.turnsSurvived }}</small> }
                     <span class="tip">
                       <span class="tip-name">{{ cardName(unit.cardId) }}</span>
                       <span class="tip-meta">{{ getDef(unit.cardId).kind }} · {{ getDef(unit.cardId).faction }} · tier {{ getDef(unit.cardId).tier }}</span>
                       <span class="tip-stats">ATK {{ unit.attack }} · HP {{ unit.health }}/{{ unit.maxHealth }}</span>
+                      @if (unit.dot) { <span class="tip-poison">Poison: {{ unit.dot.amount }} damage at the start of your turn, {{ unit.dot.turns }} {{ unit.dot.turns === 1 ? 'turn' : 'turns' }} left.</span> }
                       <span class="tip-desc">{{ getDef(unit.cardId).description }}</span>
                     </span>
                   </button>
@@ -189,8 +193,11 @@ import { SoundService } from './sound.service';
     .tip-meta{display:block;font-size:10px;letter-spacing:.06em;text-transform:capitalize;color:#8b93a5;margin-top:2px}
     .tip-stats{display:block;font-size:11px;font-weight:700;color:#d7b76c;margin-top:5px}
     .tip-desc{display:block;font-size:11px;line-height:1.45;color:#c7ccd7;margin-top:5px}
+    /* Phase C — poison badge: absolute so it never joins the .unit grid rows. */
+    .dot-badge{position:absolute;top:6px;right:6px;font-size:10px;line-height:1.4;font-weight:800;color:#7ad78d;background:#101a13;border:1px solid #2c5c3a;border-radius:6px;padding:0 4px}
+    .tip-poison{display:block;font-size:11px;font-weight:700;color:#7ad78d;margin-top:5px}
     .unit:hover>.tip,.unit:focus>.tip,.building:hover>.tip,.building:focus>.tip{display:block}
-    @media(max-width:850px){.tip{left:6px;right:6px;width:auto;transform:none}.slot.enemy .tip{bottom:auto;top:calc(100% + 8px)}}
+    @media(max-width:850px){.tip{left:6px;right:6px;width:auto;transform:none}.slot.enemy .tip{bottom:auto;top:calc(100% + 8px)}.unit:has(.dot-badge)>b{padding-right:38px}}
     .hand { display:flex; gap:8px; overflow-x:auto; padding:10px 2px 14px; min-height:230px; align-items:flex-start; }
     .footer-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.hint,.log{background:#11151d;border:1px solid #272d38;border-radius:12px;padding:12px;font-size:12px;color:#aeb6c5}.log{display:grid;gap:4px}.error{margin-top:8px;color:#ff9da5}
     .modal-backdrop{position:fixed;inset:0;background:#000b;display:grid;place-items:center;padding:20px}.modal{background:#151a23;border:1px solid #3b4352;border-radius:18px;padding:28px;max-width:440px;text-align:center}.modal h2{font-size:48px;margin:4px}.modal p{color:#aeb6c5;line-height:1.5}.modal button{background:#d7b76c;border:0;padding:11px 18px;border-radius:9px;font-weight:800}.eyebrow{text-transform:uppercase;letter-spacing:.15em;color:#d7b76c;font-size:10px}
@@ -412,7 +419,7 @@ export class GameComponent {
     if (!unit) return;
     const card = getCard(unit.cardId);
     if (card.kind !== 'unit' || !card.special) return;
-    if (card.special.target === 'self' || card.special.target === 'enemy-hero') {
+    if (card.special.target === 'self' || card.special.target === 'enemy-hero' || card.special.target === 'none') {
       this.client.sendAction({
         type: 'activate-special',
         expectedRevision: game.revision,
