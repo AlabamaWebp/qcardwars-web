@@ -482,15 +482,14 @@ export class GameService {
       throw new GameRuleError('INVALID_LANE_TYPES', 'Choose exactly 4 lane types.');
     }
     const pool = new Set<string>(LANE_TYPES);
-    const seen = new Set<string>();
+    const counts = new Map<string, number>();
     for (const value of raw) {
       if (typeof value !== 'string' || !pool.has(value)) {
         throw new GameRuleError('INVALID_LANE_TYPES', `Unknown lane type: ${String(value)}.`);
       }
-      if (seen.has(value)) throw new GameRuleError('INVALID_LANE_TYPES', `Duplicate lane type: ${value}.`);
-      seen.add(value);
+      counts.set(value, (counts.get(value) ?? 0) + 1);
     }
-    return LANE_TYPES.filter((type) => seen.has(type)) as LaneType[];
+    return LANE_TYPES.flatMap((type) => new Array(counts.get(type) ?? 0).fill(type)) as LaneType[];
   }
 
   gameView(room: Room, playerId: string): ClientGameView | null {

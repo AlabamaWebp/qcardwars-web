@@ -520,9 +520,11 @@ function handleEndTurn(state: GameState, action: Extract<GameAction, { type: 'en
 }
 
 /**
- * END-1 — a match runs exactly 4 lanes, each a distinct member of the
- * 6-type pool. Rejects anything else so the core never builds a malformed
- * board even if a caller (client, test, future code) passes a bad selection.
+ * END-2 — a match runs exactly 4 lanes drawn from the 6-type pool; lane types
+ * may now repeat (e.g. two antlion lanes) so a creator can concentrate the
+ * board. Rejects a wrong count or an unknown type so the core never builds a
+ * malformed board even if a caller (client, test, future code) passes a bad
+ * selection. Duplicates are intentionally allowed.
  */
 function assertValidLaneTypes(laneTypes: readonly LaneType[]): void {
   if (!Array.isArray(laneTypes) || laneTypes.length !== 4) {
@@ -532,21 +534,26 @@ function assertValidLaneTypes(laneTypes: readonly LaneType[]): void {
     );
   }
   const pool = new Set<string>(LANE_TYPES);
-  const seen = new Set<string>();
   for (const type of laneTypes) {
     if (!pool.has(type)) fail('INVALID_LANE_TYPES', `Unknown lane type: ${String(type)}.`);
-    if (seen.has(type)) fail('INVALID_LANE_TYPES', `Duplicate lane type: ${String(type)}.`);
-    seen.add(type);
   }
 }
 
 export function createGame(options: CreateGameOptions): GameState {
   const config: GameConfig = { ...DEFAULT_GAME_CONFIG, ...options.config };
   assertValidLaneTypes(config.laneTypes);
-  // END-1: normalize to the canonical pool order so the board layout is
+  // END-2: normalize to canonical pool order while preserving the creator's
+  // lane multiplicities (duplicates allowed). The board layout stays
   // deterministic regardless of the order a selection was supplied in
-  // (e.g. the room creator's click order).
-  config.laneTypes = LANE_TYPES.filter((type) => config.laneTypes.includes(type));
+  // (e.g. the room creator's click order), and nothing is dropped — a lane
+  // chosen twice stays twice.
+  const laneCounts = new Map<LaneType, number>();
+  for (const type of config.laneTypes) {
+    laneCounts.set(type, (laneCounts.get(type) ?? 0) + 1);
+  }
+  config.laneTypes = [...LANE_TYPES].flatMap((type) =>
+    new Array(laneCounts.get(type) ?? 0).fill(type),
+  );
   const seed = (options.seed ?? Math.floor(Math.random() * 0x7fffffff)) || 1;
   const [first, second] = options.players;
   const firstActive = seed % 2 === 0 ? first.id : second.id;

@@ -26,25 +26,36 @@ import { GameClientService } from './game-client.service';
         @if (!client.room()) {
           <div class="lanes">
             <div class="lane-heading">
-              Choose the 4 lanes for your room
+              Choose 4 lanes for your room (repeats allowed)
               <span class="count">{{ selectedLanes().length }}/4</span>
             </div>
             <div class="lane-grid">
               @for (type of laneTypes; track type) {
                 @let accent = laneAccent(type);
-                @let selected = selectedLanes().includes(type);
+                @let count = selectedLanes().filter((lane) => lane === type).length;
+                @let selected = count > 0;
                 <button
                   class="lane-chip"
                   [attr.aria-pressed]="selected"
                   [class.selected]="selected"
-                  [style.border-color]="selected ? accent : undefined"
+                  [class.locked]="selectedLanes().length >= 4 && !selected"
+                  [disabled]="selectedLanes().length >= 4 && !selected"
+                  [style.border-color]="accent"
                   [style.color]="accent"
                   [style.box-shadow]="selected ? '0 0 14px ' + accent + '45' : undefined"
                   (click)="toggleLane(type)"
-                >{{ type }}</button>
+                >
+                  <span class="lane-chip__name">{{ type }}</span>
+                  @if (selected) {
+                    <span class="lane-chip__count">{{ count }}</span>
+                  }
+                </button>
               }
             </div>
-            <div class="lane-hint">Exactly four lanes — the board is shared by both players.</div>
+            <div class="lane-hint">
+              Exactly four lanes — repeats allowed, so a faction can fill more than one lane. Only the chosen lane
+              factions fill the deck.
+            </div>
           </div>
           <div class="create-row">
             <button
@@ -94,9 +105,12 @@ import { GameClientService } from './game-client.service';
     .lane-heading { color:#b8c0cf; font-size:13px; display:flex; gap:9px; align-items:center; }
     .lane-heading .count { color:#d7b76c; font-weight:800; }
     .lane-grid { display:grid; grid-template-columns:repeat(3, 1fr); gap:8px; }
-    .lane-chip { padding:10px 8px; border-radius:10px; background:#0b0e13; border:1px solid #363d4c; text-transform:capitalize; font-weight:700; opacity:.55; }
+    .lane-chip { padding:10px 8px; border-radius:10px; background:#0b0e13; border:1px solid #363d4c; text-transform:capitalize; font-weight:700; opacity:.55; display:grid; align-items:center; justify-items:center; gap:4px; min-height:44px; }
     .lane-chip:hover { opacity:.85; }
     .lane-chip.selected { opacity:1; background:#141a24; }
+    .lane-chip[disabled] { opacity:.3 !important; cursor:not-allowed; }
+    .lane-chip[disabled]:hover { opacity:.3 !important; }
+    .lane-chip__count { font-size:11px; font-weight:800; opacity:.9; }
     .lane-hint { color:#7c8598; font-size:11px; }
     .create-row { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
     .room-lanes { color:#7c8598; font-size:12px; text-transform:capitalize; }
@@ -125,20 +139,24 @@ export class LobbyComponent {
   }
 
   /**
-   * Toggle a lane. The selection may dip to three (the swap intermediate:
-   * deselect, then select) but never below three or above four. The create
-   * buttons are disabled while the count is not exactly four, and the server
-   * still validates the payload (defense in depth).
+   * Toggle a lane toward a four-slot multiset. Lane types may now repeat
+   * (e.g. two antlion lanes). While under four, tapping a lane adds an instance
+   * (so a lane can grow into a repeat); at four, tapping a chosen lane drops one
+   * instance. The create buttons stay disabled until the count is exactly four,
+   * and the server still validates the payload (defense in depth).
    */
   toggleLane(type: LaneType) {
     const current = this.selectedLanes();
-    if (current.includes(type)) {
-      if (current.length < 4) return;
-      this.selectedLanes.set(current.filter((entry) => entry !== type));
-    } else {
-      if (current.length >= 4) return;
-      this.selectedLanes.set([...current, type]);
+    if (current.length >= 4) {
+      // At the cap: tapping a chosen lane removes one instance of it.
+      const index = current.indexOf(type);
+      if (index === -1) return;
+      this.selectedLanes.set([...current.slice(0, index), ...current.slice(index + 1)]);
+      return;
     }
+    // Under the cap: add an instance. Repeats are allowed, so tapping a lane
+    // that is already chosen grows it rather than swapping.
+    this.selectedLanes.set([...current, type]);
   }
 
   create() {

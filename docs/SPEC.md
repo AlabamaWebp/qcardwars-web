@@ -22,10 +22,12 @@ This spec resolves unknown original details into explicit, testable web defaults
 
 ## Lane model
 
-The room creator picks exactly 4 of the 6 lane types in the pool (server-validated; an invalid selection — wrong
-count, unknown type, or duplicate — is rejected with `INVALID_LANE_TYPES`). The engine re-validates in
-`createGame` and normalizes the selection to canonical pool order. Rematches in a room keep the same selection.
-Decks are built from universal cards plus cards of the four selected factions.
+The room creator picks exactly 4 lane types from the 6-type pool (server-validated; an invalid selection — wrong
+count or unknown type — is rejected with `INVALID_LANE_TYPES`). Lane types may now repeat (e.g. two antlion
+lanes): the pick is a multiset, not a set of four distinct types, so a faction may fill more than one lane. The
+engine re-validates in `createGame` and normalizes the selection to canonical pool order while preserving
+multiplicities. Rematches in a room keep the same selection. Decks are built from universal cards plus cards of the
+selected lane factions only, so a card from a lane type the room is not using can never be drawn.
 
 Each lane has one shared type and two sides. Each player may have at most:
 

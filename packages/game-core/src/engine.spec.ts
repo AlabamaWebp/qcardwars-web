@@ -1353,11 +1353,10 @@ describe('selectable lanes (END-1)', () => {
     expect(state.lanes.map((lane) => lane.type)).toEqual(['antlion', 'combine', 'guardian', 'wraith']);
   });
 
-  it('rejects lane selections that are not exactly 4 distinct pool members', () => {
+  it('rejects lane selections that are not exactly 4 pool members', () => {
     const bad = [
       ['antlion', 'combine', 'rebel'], // too few
       ['antlion', 'combine', 'rebel', 'zombie', 'wraith'], // too many
-      ['antlion', 'antlion', 'rebel', 'zombie'], // duplicate
       ['antlion', 'combine', 'rebel', 'gmod'], // unknown type
     ];
     for (const laneTypes of bad) {
@@ -1375,6 +1374,11 @@ describe('selectable lanes (END-1)', () => {
         ),
       ).toBe('INVALID_LANE_TYPES');
     }
+  });
+
+  it('accepts a lane selection with a repeated type and preserves multiplicities in canonical order', () => {
+    const state = gameWithLanes(5, ['antlion', 'guardian', 'antlion', 'zombie']);
+    expect(state.lanes.map((lane) => lane.type)).toEqual(['antlion', 'antlion', 'zombie', 'guardian']);
   });
 
   it('decks contain only cards whose faction is universal or a selected lane', () => {
@@ -1400,6 +1404,24 @@ describe('selectable lanes (END-1)', () => {
     );
     expect(factions.has('guardian')).toBe(true);
     expect(factions.has('wraith')).toBe(true);
+  });
+
+  it('never draws a card from a lane type the room is not using (repeat-lane pick)', () => {
+    // All four lanes are rebel — only rebel + universal cards may ever be drawn.
+    const state = gameWithLanes(11, ['rebel', 'rebel', 'rebel', 'rebel']);
+    const selected = new Set<string>(['rebel']);
+    for (const playerId of ['p1', 'p2']) {
+      for (const handCard of [...state.players[playerId].deck, ...state.players[playerId].hand]) {
+        const faction = CARD_BY_ID.get(handCard.cardId)!.faction;
+        expect(faction === 'universal' || selected.has(faction)).toBe(true);
+      }
+    }
+  });
+
+  it('still builds a non-empty deck when only one faction is selectable', () => {
+    const state = gameWithLanes(9, ['antlion', 'antlion', 'antlion', 'antlion']);
+    expect(state.players.p1.deck.length).toBeGreaterThan(0);
+    expect(state.players.p1.hand.length).toBeGreaterThan(0);
   });
 
   it('lets a guardian unit play only into the guardian lane', () => {

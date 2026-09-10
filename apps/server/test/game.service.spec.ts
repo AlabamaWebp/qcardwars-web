@@ -108,11 +108,30 @@ describe('GameService lane selection (END-1)', () => {
     ]);
   });
 
-  it('rejects selections that are not exactly 4 distinct pool members', () => {
+  it('accepts a selection with a repeated lane type and stores it in canonical pool order', () => {
+    const service = new GameService();
+    // Two antlion lanes, supplied out of pool order — must be preserved & reordered.
+    const created = service.createRoom(
+      's1',
+      'Alice',
+      undefined,
+      false,
+      ['antlion', 'guardian', 'antlion', 'zombie'],
+    );
+    expect(created.room.laneTypes).toEqual(['antlion', 'antlion', 'zombie', 'guardian']);
+    service.joinRoom('s2', created.room.code, 'Bob');
+    expect(service.roomForSocket('s1')!.game!.lanes.map((lane) => lane.type)).toEqual([
+      'antlion',
+      'antlion',
+      'zombie',
+      'guardian',
+    ]);
+  });
+
+  it('rejects selections that are not exactly 4 pool members', () => {
     const bad = [
       ['antlion', 'combine', 'rebel'], // too few
       ['antlion', 'combine', 'rebel', 'zombie', 'wraith'], // too many
-      ['antlion', 'antlion', 'rebel', 'zombie'], // duplicate
       ['antlion', 'combine', 'rebel', 'gmod'], // unknown type
       'antlion', // not an array
       ['antlion', 'combine', 'rebel', null], // non-string entry
@@ -128,9 +147,10 @@ describe('GameService lane selection (END-1)', () => {
     const service = new GameService();
     const first = service.createRoom('s1', 'Alice');
     service.joinRoom('s2', first.room.code, 'Bob');
-    expect(() => service.createRoom('s1', 'Alice', undefined, false, ['antlion', 'antlion', 'rebel', 'zombie'])).toThrowError(
-      GameRuleError,
-    );
+    // A duplicate lane type is now valid; use a genuinely invalid (unknown) type here.
+    expect(() =>
+      service.createRoom('s1', 'Alice', undefined, false, ['antlion', 'combine', 'rebel', 'gmod']),
+    ).toThrowError(GameRuleError);
     // s1 is still in the original room, still a player, game untouched.
     const room = service.roomForSocket('s1')!;
     expect(room.code).toBe(first.room.code);
