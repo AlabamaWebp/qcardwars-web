@@ -1,8 +1,10 @@
 import { Injectable } from '@nestjs/common';
 import {
+  AI_PLAYER_NAME,
   applyAction,
   ClientAction,
   ClientGameView,
+  chooseAiAction,
   createGame,
   forfeitGame,
   GameAction,
@@ -12,11 +14,16 @@ import {
   toClientView,
 } from '@qcw/game-core';
 
+/** Placeholder socket id for the solo AI seat (never matches a real socket). */
+export const AI_SOCKET_ID = 'ai';
+
 export interface RoomPlayer {
   playerId: string;
   socketId: string;
   name: string;
   connected: boolean;
+  /** True for the solo AI seat (exempt from disconnect/grace/forfeit). */
+  ai?: boolean;
 }
 
 export interface Room {
@@ -73,7 +80,12 @@ export class GameService {
     this.roomChangedListeners.push(listener);
   }
 
-  createRoom(socketId: string, rawName: string, seed?: number): { room: Room; playerId: string; token: string } {
+  createRoom(
+    socketId: string,
+    rawName: string,
+    seed?: number,
+    solo?: boolean,
+  ): { room: Room; playerId: string; token: string } {
     this.leaveBySocket(socketId);
     const code = this.generateRoomCode();
     const playerId = this.generatePlayerId();
@@ -83,6 +95,17 @@ export class GameService {
       game: null,
       seed: seed ?? undefined,
     };
+    if (solo) {
+      // Solo match: fill the second seat with the AI and start immediately.
+      room.players.push({
+        playerId: this.generatePlayerId(),
+        socketId: AI_SOCKET_ID,
+        name: AI_PLAYER_NAME,
+        connected: true,
+        ai: true,
+      });
+      this.startIfReady(room);
+    }
     this.rooms.set(code, room);
     this.socketToRoom.set(socketId, code);
     return { room, playerId, token: this.issueSessionToken(code, playerId) };
@@ -140,6 +163,13 @@ export class GameService {
     this.markPlayerDisconnected(room, player);
     this.cancelSession(room.code, player.playerId);
 
+    // Solo match: the room dies with the human — no forfeit to the AI seat
+    // (which is always "connected") and no rejoin grace.
+    if (room.players.some((seat) => seat.ai)) {
+      this.deleteRoomAndClearSessions(room);
+      return room;
+    }
+
     if (room.game && room.game.status === 'playing') {
       const remaining = room.players.find((seat) => seat.playerId !== player.playerId && seat.connected);
       if (remaining) {
@@ -183,6 +213,13 @@ export class GameService {
     const player = room.players.find((entry) => entry.socketId === socketId);
     this.socketToRoom.delete(socketId);
     if (!player) return room;
+
+    // Solo match: a tab close / network drop ends the match — the AI is not a
+    // real player to wait for, so no rejoin grace and no auto-forfeit.
+    if (room.players.some((seat) => seat.ai)) {
+      this.deleteRoomAndClearSessions(room);
+      return room;
+    }
 
     this.markPlayerDisconnected(room, player);
     this.armSessionGrace(room.code, player.playerId);
@@ -421,7 +458,47 @@ export class GameService {
   }
 
   gameView(room: Room, playerId: string): ClientGameView | null {
-    return room.game ? toClientView(room.game, playerId) : null;
+    // L3: expose a stable solo flag derived from the room's seat configuration
+    // (an AI seat), so the client need not match the AI's display name.
+    const solo = room.players.some((seat) => seat.ai);
+    return room.game ? toClientView(room.game, playerId, solo) : null;
+  }
+
+  /** The AI seat in a room (solo matches), if any. */
+  aiSeat(room: Room): RoomPlayer | null {
+    return room.players.find((seat) => seat.ai) ?? null;
+  }
+
+  /** All solo rooms (rooms containing an AI seat). */
+  aiRooms(): Room[] {
+    return [...this.rooms.values()].filter((room) => this.aiSeat(room) !== null);
+  }
+
+  /**
+   * Advance the AI seat by exactly one action (driven by AiService's ~700 ms
+   * tick). The action is chosen by the deterministic game-core policy and
+   * applied through the same server-authoritative `applyAction` path as a
+   * human's socket action, so the AI can never cheat. A stale revision (a
+   * human action landed between choose and apply) skips the tick; the next
+   * tick retries on the fresh state.
+   */
+  applyAiAction(room: Room): void {
+    const game = room.game;
+    const seat = this.aiSeat(room);
+    if (!game || game.status !== 'playing' || !seat || game.activePlayerId !== seat.playerId) return;
+    const action = chooseAiAction(game, seat.playerId);
+    if (!action) return;
+    try {
+      room.game = applyAction(game, action);
+    } catch {
+      return;
+    }
+    this.notifyRoomChanged(room);
+  }
+
+  /** Broadcast a server-driven room change to all connected seats (see onRoomChanged). */
+  notifyRoomChanged(room: Room): void {
+    for (const listener of this.roomChangedListeners) listener(room);
   }
 
   /**
@@ -441,6 +518,18 @@ export class GameService {
     // false; a rematch would otherwise create a game only one player sees.
     if (!room.players.every((p) => p.connected)) {
       throw new GameRuleError('NOT_CONNECTED', 'Your opponent is not connected. Rematch not available.');
+    }
+
+    // Solo match: the AI auto-rematches — no second confirmation needed. The
+    // seed is re-rolled (L2) so a solo rematch draws a different deck order
+    // instead of replaying the identical hand sequence. Two-player rematches
+    // keep the stored seed (deterministic replay, per spec).
+    if (room.players.some((seat) => seat.ai)) {
+      this.rematchRequests.delete(room.code);
+      room.seed = Math.floor(Math.random() * 0x7fffffff);
+      room.game = null;
+      this.startIfReady(room);
+      return room;
     }
 
     const requests = this.rematchRequests.get(room.code) ?? new Set<string>();

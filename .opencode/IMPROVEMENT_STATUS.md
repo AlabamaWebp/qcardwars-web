@@ -1,6 +1,6 @@
 # QCardWars Web — Improvement Ledger (multi-phase upgrade)
 
-Last updated: Phase B complete — committed `1bf52e1`, reviewer **PASS** (1 MED + 3 LOW, non-blocking; LOW-2 stale-error-behind-modal already fixed + browser-verified). MED (poison/dot UI indicator) + test gaps + optional special-click fix folded into the Phase C brief. `pnpm verify` green. Phase A committed `1943c8a` (reviewer PASS). Phase 0a + 0b committed. 0c still optional.
+Last updated: Phase C complete — committed `3f68155`, reviewer **PASS** (0 BLOCKER/HIGH; 5 LOW — LOW-1 test-ordering pin + LOW-3 mobile badge overlap fixed pre-commit; LOW-2 stale-revision banner, LOW-4 activate-special 2-client smoke, LOW-5 engine parameterization gaps deferred to Phase D). `pnpm verify` fully green. Phase B committed `1bf52e1` (PASS). Phase A committed `1943c8a` (PASS). Phase 0a + 0b committed. 0c still optional.
 
 ## Phase plan
 - **Phase 0 — defects & foundation**
@@ -9,8 +9,8 @@ Last updated: Phase B complete — committed `1bf52e1`, reviewer **PASS** (1 MED
   - [ ] 0c Playwright e2e foundation + two-client browser smoke (manual multi-context matrix already done; scratch script exists at `.opencode/browser-check/`, gitignored; codify as a repeatable test if budget allows)
 - [x] **Phase A — design/UX**: faction visual identity, card tooltips, combat animations, sound effects (toggleable) — DONE + committed `1943c8a` (A.1 CSS-only; A.2 presentational FX + WebAudio; 5 reviewer findings fixed; browser-verified; `pnpm verify` green).
 - [x] **Phase B — rules**: 7 of 8 planned primitives delivered — `debuff-unit`, `dot`, `aoe`, `add-card`, `gain-mana`, `heal-hero`, `destroy-unit` (min-5 constraint satisfied; `move-unit` deliberately deferred as lowest-value/least-orthogonal) + 11 catalog cards + 16 new engine tests (51 total) + 2 new error codes + `validateEffects()` hardening. Browser-verified: full 2-client matches to victory, new cards seen and accepted in live play (Scorched Earth aoe, Overcharge gain-mana).
-- [ ] **Phase C — content**: expand catalog to 40–60 cards across factions/kinds (reuse the 7 primitives, no new engine branching) + poison/dot UI indicator (reviewer MED: chip badge + tooltip; `ClientGameView` already carries the data) + reviewer test gaps (aoe on lane with building, `UNKNOWN_CARD` via `handleSpecial`, dot + combat same round) + optional: `target:'none'` specials execute on first click.
-- [ ] **Phase D — modes**: solo AI opponent, rejoin e2e (browser), match summary screen; spectator optional (drop first if needed).
+- [x] **Phase C — content** — DONE + committed `3f68155` (reviewer PASS): catalog 40→60 cards (antlion 12 / combine 11 / rebel 12 / zombie 12 / universal 13; 32 units, 9 buildings, 19 powers; all 7 primitives on ≥2 cards, ≥9 buildings, costs 1–8; only existing primitives — zero engine branching added); poison/dot UI indicator (☠ badge on unit chips + tooltip line; `ClientGameView` already carried the data); 6 new engine tests (57 total: aoe-with-building, dot-tick-before-combat log sequence, UNKNOWN_CARD atomicity with validation-order pin, B-4 guard rewritten to 4 coverage tests); `target:'none'` unit specials fire on first click. Browser-verified: 2-client live matches, badge + tooltip visible, single-click Field Medkit activation logged, logs identical, no overflow at 1440×900 / 390×844, no console/network errors.
+- [ ] **Phase D — modes**: solo AI opponent, rejoin e2e (browser), match summary screen; spectator optional (drop first if needed). Also deferred here: reviewer LOW-2 (stale-revision banner on rapid double-click — pre-existing pattern, skip banner or debounce), LOW-4 (2-client `activate-special` smoke test), LOW-5 (dot-replace / heal-clamp / attack-bonus contested-lane engine tests).
 - [ ] **End task**: player-selectable 4 lane types at game start (lobby UI + createGame config + server validation).
 
 ## Constraints (never break)
@@ -38,8 +38,8 @@ Last updated: Phase B complete — committed `1bf52e1`, reviewer **PASS** (1 MED
   no live grace) — no stuck `playing` match.
 
 ## Next
-1. Phase C (coder): catalog 40–60 cards + poison/dot UI indicator + reviewer test gaps + optional special first-click execution. Then reviewer pass → commit.
-2. Phase D (modes): solo AI opponent, rejoin e2e (browser), match summary screen; spectator optional (drop first if needed).
+1. Phase D (coder): solo AI opponent, rejoin e2e (browser), match summary screen; spectator optional (drop first if needed). Plus deferred Phase C LOWs: LOW-2 stale-revision banner, LOW-4 activate-special 2-client smoke, LOW-5 engine parameterization tests. Then reviewer pass → commit.
+2. End task: player-selectable 4 lane types at game start (lobby UI + createGame config + server validation).
 3. Phase 0c (e2e codification) remains optional; do it if budget allows.
 
 ## Phase B verification notes (this pass)

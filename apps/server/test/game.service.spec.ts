@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest';
-import { GameRuleError } from '@qcw/game-core';
+import { describe, expect, it, vi } from 'vitest';
+import { AI_PLAYER_NAME, ClientAction, forfeitGame, GameRuleError } from '@qcw/game-core';
+import { AiService } from '../src/game/ai.service';
 import { DEFAULT_REJOIN_GRACE_MS, GameService, Room } from '../src/game/game.service';
 
 function sleep(ms: number): Promise<void> {
@@ -464,6 +465,21 @@ describe('GameService rejoin grace (P1-04)', () => {
     expect(room.players.find((p) => p.playerId === created.playerId)!.connected).toBe(false);
   });
 
+  it('solo: a single rematch confirmation starts a fresh game (AI auto-rematches)', () => {
+    const service = new GameService();
+    const created = service.createRoom('s1', 'Alice', 42, true);
+    const room = service.roomForSocket('s1')!;
+    // Simulate a finished match.
+    room.game!.status = 'finished';
+    room.game!.winnerId = created.playerId;
+
+    const after = service.rematch('s1');
+    expect(after.game!.status).toBe('playing');
+    expect(after.game!.revision).toBe(0);
+    expect(after.game!.players).toHaveProperty(created.playerId);
+    expect(after.game!.players).toHaveProperty(service.aiSeat(after)!.playerId);
+  });
+
   it('finished-room leave clears the other seat\'s session records (no leak)', async () => {
     const service = new GameService();
     service.rejoinGraceMs = 20;
@@ -492,5 +508,142 @@ describe('GameService rejoin grace (P1-04)', () => {
     }
     expect(internals.tokenIndex.get(created.token)).toBeUndefined();
     expect(internals.tokenIndex.get(joined.token)).toBeUndefined();
+  });
+});
+
+describe('GameService solo AI (Phase D D-1)', () => {
+  it('creates a started solo room with an always-connected AI seat', () => {
+    const service = new GameService();
+    const created = service.createRoom('s1', 'Alice', 42, true);
+    const room = created.room;
+    expect(room.players).toHaveLength(2);
+    const ai = service.aiSeat(room);
+    expect(ai).not.toBeNull();
+    expect(ai!.name).toBe(AI_PLAYER_NAME);
+    expect(ai!.connected).toBe(true);
+    expect(room.game).not.toBeNull();
+    expect(room.game!.status).toBe('playing');
+    expect(service.aiRooms()).toHaveLength(1);
+  });
+
+  it('does not start a game for a non-solo created room', () => {
+    const service = new GameService();
+    const created = service.createRoom('s1', 'Alice');
+    expect(created.room.game).toBeNull();
+    expect(service.aiSeat(created.room)).toBeNull();
+    expect(service.aiRooms()).toHaveLength(0);
+  });
+
+  it('applyAiAction is a no-op while it is not the AI turn', () => {
+    const service = new GameService();
+    const created = service.createRoom('s1', 'Alice', 42, true);
+    const room = service.roomForSocket('s1')!;
+    let broadcasts = 0;
+    service.onRoomChanged(() => broadcasts++);
+    const revision = room.game!.revision;
+    service.applyAiAction(room); // the human (player 1) starts the match
+    expect(room.game!.revision).toBe(revision);
+    expect(broadcasts).toBe(0);
+  });
+
+  it('applyAiAction advances the AI turn by exactly one legal action and broadcasts', () => {
+    const service = new GameService();
+    const created = service.createRoom('s1', 'Alice', 42, true);
+    const room = service.roomForSocket('s1')!;
+    // End the human's opening turn through the normal socket path so the AI is active.
+    const endTurn = { type: 'end-turn', expectedRevision: room.game!.revision } as ClientAction;
+    service.applySocketAction('s1', endTurn);
+    expect(room.game!.activePlayerId).toBe(service.aiSeat(room)!.playerId);
+
+    let broadcasts = 0;
+    service.onRoomChanged(() => broadcasts++);
+    const revisionBefore = room.game!.revision;
+    service.applyAiAction(room);
+    expect(room.game!.revision).toBe(revisionBefore + 1);
+    expect(broadcasts).toBe(1);
+  });
+
+  it('AiService.tick() advances the AI by exactly one action per tick, no-ops otherwise', () => {
+    const service = new GameService();
+    const ai = new AiService(service);
+    // Even seed: the first player (the human) starts the match.
+    const created = service.createRoom('s1', 'Alice', 8, true);
+    const room = service.roomForSocket('s1')!;
+    const aiSeat = service.aiSeat(room)!;
+    service.applySocketAction('s1', { type: 'end-turn', expectedRevision: room.game!.revision } as ClientAction);
+    expect(room.game!.activePlayerId).toBe(aiSeat.playerId);
+
+    const revisionBefore = room.game!.revision;
+    ai.tick();
+    // The AI takes exactly one action on its own turn.
+    expect(room.game!.revision).toBe(revisionBefore + 1);
+
+    if (room.game!.activePlayerId === aiSeat.playerId) {
+      // First action was a card/special: the next tick takes one more.
+      const afterFirst = room.game!.revision;
+      ai.tick();
+      expect(room.game!.revision).toBe(afterFirst + 1);
+    } else {
+      // First action ended the AI's turn: ticks are no-ops on the human turn.
+      const afterFirst = room.game!.revision;
+      ai.tick();
+      expect(room.game!.revision).toBe(afterFirst);
+    }
+  });
+
+  it('solo: leave/disconnect deletes the room immediately (no grace, no forfeit to the AI)', async () => {
+    const service = new GameService();
+    service.rejoinGraceMs = 20;
+    const created = service.createRoom('s1', 'Alice', 42, true);
+    const code = created.room.code;
+    const internals = service as unknown as { rooms: Map<string, unknown>; sessions: Map<string, unknown> };
+
+    service.disconnectBySocket('s1');
+    expect(service.roomForSocket('s1')).toBeNull();
+    await sleep(80);
+    expect(internals.rooms.get(code)).toBeUndefined();
+    for (const key of internals.sessions.keys()) {
+      expect(key.startsWith(`${code}:`)).toBe(false);
+    }
+
+    const second = service.createRoom('s2', 'Alice', 43, true);
+    service.leaveBySocket('s2');
+    expect(service.roomForSocket('s2')).toBeNull();
+    expect(internals.rooms.get(second.room.code)).toBeUndefined();
+  });
+
+  it('solo rematch re-rolls the seed so the next match is not a replay (L2)', () => {
+    const service = new GameService();
+    const created = service.createRoom('s1', 'Alice', 42, true);
+    const room = service.roomForSocket('s1')!;
+    const humanId = created.playerId;
+    expect(room.seed).toBe(42);
+
+    // Capture the original match's full card order for the human (hand + deck).
+    const originalOrder = [...room.game!.players[humanId].hand, ...room.game!.players[humanId].deck]
+      .map((c) => c.cardId);
+
+    // Finish the match so a rematch is legal.
+    room.game = forfeitGame(room.game!, humanId, 'test finish');
+
+    // Hermetic reseed: mock Math.random so the new seed is deterministic. The
+    // engine's shuffle uses its own seeded PRNG, so Math.random is only consumed
+    // by the reseed line — the mock cannot leak into deck building.
+    const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    try {
+      service.rematch('s1');
+    } finally {
+      randomSpy.mockRestore();
+    }
+
+    expect(room.game).not.toBeNull();
+    expect(room.game!.status).toBe('playing');
+    // The re-rolled seed is deterministic under the mocked RNG and differs from the original.
+    expect(room.seed).toBe(Math.floor(0.5 * 0x7fffffff));
+    expect(room.seed).not.toBe(42);
+    // The new match's deck order differs from the original (not a replay).
+    const newOrder = [...room.game!.players[humanId].hand, ...room.game!.players[humanId].deck]
+      .map((c) => c.cardId);
+    expect(newOrder).not.toEqual(originalOrder);
   });
 });

@@ -89,6 +89,7 @@ function startTurn(state: GameState, playerId: PlayerId): void {
   player.turnsStarted += 1;
   player.maxMana = Math.min(state.config.manaCap, player.turnsStarted);
   player.mana = player.maxMana;
+  state.stats[playerId].turnsTaken += 1;
 
   for (const lane of state.lanes) {
     const side = lane.sides[playerId];
@@ -98,12 +99,15 @@ function startTurn(state: GameState, playerId: PlayerId): void {
     // before this player's combat. A new dot REPLACES any existing dot — dots
     // never stack. Dot damage kills at 0 like normal damage.
     if (side.unit.dot) {
+      // Dots can only come from the opponent, so the tick credits them.
+      state.stats[otherPlayerId(state, playerId)].damageDealt += side.unit.dot.amount;
       side.unit.health -= side.unit.dot.amount;
       addLog(state, `${getCard(side.unit.cardId).name} suffers ${side.unit.dot.amount} dot damage in lane ${lane.index + 1}.`);
       if (side.unit.dot.turns <= 1) side.unit.dot = undefined;
       else side.unit.dot.turns -= 1;
       if (side.unit.health <= 0) {
         addLog(state, `${getCard(side.unit.cardId).name} is destroyed in lane ${lane.index + 1}.`);
+        state.stats[otherPlayerId(state, playerId)].unitsDestroyed += 1;
         side.unit = null;
       }
     }
@@ -155,6 +159,9 @@ function removeDeadUnit(state: GameState, lane: LaneState, ownerId: PlayerId): v
   const unit = lane.sides[ownerId].unit;
   if (unit && unit.health <= 0) {
     addLog(state, `${getCard(unit.cardId).name} is destroyed in lane ${lane.index + 1}.`);
+    // In 1v1 every unit death results from the opponent (combat, effects, dots),
+    // so the kill is credited to the dead unit's opponent.
+    state.stats[otherPlayerId(state, ownerId)].unitsDestroyed += 1;
     lane.sides[ownerId].unit = null;
   }
 }
@@ -188,6 +195,7 @@ function applyEffects(
       case 'damage-hero': {
         if (targetKind !== 'enemy-hero') fail('INVALID_EFFECT_TARGET', 'Hero damage requires enemy hero target.');
         state.players[enemyId].hp -= effect.amount;
+        state.stats[actorId].damageDealt += effect.amount;
         maybeFinish(state, enemyId);
         break;
       }
@@ -195,6 +203,7 @@ function applyEffects(
         if (targetKind !== 'enemy-unit') fail('INVALID_EFFECT_TARGET', 'Unit damage requires enemy unit target.');
         const target = targetUnit(state, actorId, 'enemy-unit', sourceLaneIndex, targetLaneIndex);
         target.unit.health -= effect.amount;
+        state.stats[actorId].damageDealt += effect.amount;
         removeDeadUnit(state, target.lane, target.ownerId);
         break;
       }
@@ -228,7 +237,19 @@ function applyEffects(
         target.unit.attack = Math.max(0, target.unit.attack - effect.attack);
         target.unit.health -= effect.health;
         addLog(state, `${getCard(target.unit.cardId).name} loses ${effect.attack} ATK and ${effect.health} HP in lane ${target.lane.index + 1}.`);
-        removeDeadUnit(state, target.lane, target.ownerId);
+        if (target.ownerId === actorId) {
+          // Friendly self-hit (unreachable with the current catalog — every
+          // debuff is enemy-unit — but guarded for future cards): not "damage
+          // dealt" and not an opponent kill; a self-destruction credits nobody
+          // (same convention as the AOE self-hit branch).
+          if (target.unit.health <= 0) {
+            addLog(state, `${getCard(target.unit.cardId).name} is destroyed in lane ${target.lane.index + 1}.`);
+            target.lane.sides[actorId].unit = null;
+          }
+        } else {
+          state.stats[actorId].damageDealt += effect.health;
+          removeDeadUnit(state, target.lane, target.ownerId);
+        }
         break;
       }
       case 'dot': {
@@ -248,9 +269,18 @@ function applyEffects(
         const lane = getLane(state, targetLaneIndex);
         for (const ownerId of [actorId, enemyId]) {
           const unit = lane.sides[ownerId].unit;
-          if (unit) {
-            unit.health -= effect.amount;
+          if (!unit) continue;
+          unit.health -= effect.amount;
+          if (ownerId === enemyId) {
+            // Hitting the opponent: count the damage and credit the kill normally.
+            state.stats[actorId].damageDealt += effect.amount;
             removeDeadUnit(state, lane, ownerId);
+          } else if (unit.health <= 0) {
+            // Self-hit: the actor's own AOE taking out the actor's OWN unit is
+            // not "damage dealt" and is not an opponent kill, so the death is
+            // credited to NOBODY (neither the actor nor the opponent).
+            addLog(state, `${getCard(unit.cardId).name} is destroyed in lane ${lane.index + 1}.`);
+            lane.sides[actorId].unit = null;
           }
         }
         addLog(state, `${effect.amount} damage hits both sides of lane ${lane.index + 1}.`);
@@ -405,6 +435,7 @@ function handlePlayCard(state: GameState, action: Extract<GameAction, { type: 'p
   player.mana -= card.cost;
   player.hand.splice(handIndex, 1);
   player.discard.push(handCard);
+  state.stats[action.playerId].cardsPlayed += 1;
   addLog(state, `${player.name} plays ${card.name}.`);
 }
 
@@ -463,6 +494,7 @@ function resolveCombat(state: GameState, attackerId: PlayerId): void {
     const attacker = lane.sides[attackerId].unit;
     if (!attacker || attacker.health <= 0) continue;
     const damage = Math.max(0, attacker.attack + attackBonus(state, lane, attackerId));
+    state.stats[attackerId].damageDealt += damage;
     const defender = lane.sides[defenderId].unit;
     if (defender) {
       defender.health -= damage;
@@ -507,6 +539,7 @@ export function createGame(options: CreateGameOptions): GameState {
     config,
     seed,
     nextUid: 1,
+    stats: {},
   };
 
   for (const player of options.players) {
@@ -522,6 +555,7 @@ export function createGame(options: CreateGameOptions): GameState {
       discard: [],
       connected: true,
     };
+    state.stats[player.id] = { turnsTaken: 0, cardsPlayed: 0, unitsDestroyed: 0, damageDealt: 0 };
   }
 
   state.lanes = config.laneTypes.map((type, index) => ({
@@ -581,7 +615,11 @@ export function setPlayerConnected(state: GameState, playerId: PlayerId, connect
   return next;
 }
 
-export function toClientView(state: GameState, viewerId: PlayerId): ClientGameView {
+export function toClientView(
+  state: GameState,
+  viewerId: PlayerId,
+  solo = false,
+): ClientGameView {
   if (!state.players[viewerId]) fail('NOT_A_PLAYER', 'Viewer is not a player in this game.');
   const players: ClientGameView['players'] = {};
   for (const id of state.playerOrder) {
@@ -617,5 +655,7 @@ export function toClientView(state: GameState, viewerId: PlayerId): ClientGameVi
     winnerId: state.winnerId,
     log: clone(state.log),
     config: clone(state.config),
+    stats: clone(state.stats),
+    solo,
   };
 }

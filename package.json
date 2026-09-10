@@ -13,12 +13,14 @@
     "test": "pnpm -r --if-present test",
     "typecheck": "pnpm -r --if-present typecheck",
     "verify": "pnpm typecheck && pnpm test && pnpm build",
+    "e2e": "node e2e/e2e.mjs",
     "format": "prettier --write .",
     "format:check": "prettier --check ."
   },
   "devDependencies": {
     "concurrently": "^9.2.1",
     "prettier": "^3.6.2",
+    "puppeteer-core": "^25.10.0",
     "typescript": "~6.0.0"
   }
 }

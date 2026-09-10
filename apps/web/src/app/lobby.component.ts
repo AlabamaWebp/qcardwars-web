@@ -22,7 +22,10 @@ import { GameClientService } from './game-client.service';
       <section class="panel form-panel">
         <label>Player name <input [(ngModel)]="name" maxlength="24" /></label>
         @if (!client.room()) {
-          <button class="primary" (click)="create()" [disabled]="!client.connected()">Create room</button>
+          <div class="create-row">
+            <button class="primary" (click)="create()" [disabled]="!client.connected()">Create room</button>
+            <button (click)="createSolo()" [disabled]="!client.connected()">Play solo (vs AI)</button>
+          </div>
           <div class="join-row">
             <input class="code" [(ngModel)]="code" maxlength="6" placeholder="ROOM CODE" />
             <button (click)="join()" [disabled]="!client.connected() || code.trim().length < 4">Join</button>
@@ -55,6 +58,7 @@ import { GameClientService } from './game-client.service';
     input { width:100%; border:1px solid #363d4c; background:#0b0e13; color:#fff; padding:12px 14px; border-radius:10px; outline:none; }
     button { border:1px solid #3e4655; background:#202632; color:#fff; border-radius:10px; padding:12px 16px; font-weight:700; }
     .primary { background:#d7b76c; color:#111; border-color:#d7b76c; }
+    .create-row { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
     .join-row { display:grid; grid-template-columns:1fr auto; gap:10px; }
     .code { text-transform:uppercase; letter-spacing:.12em; font-weight:800; }
     .room { display:grid; gap:10px; } .room strong { font-size:22px; letter-spacing:.12em; }
@@ -74,6 +78,12 @@ export class LobbyComponent {
   create() {
     this.persistName();
     this.client.createRoom(this.name);
+  }
+
+  /** Phase D D-1 — solo match vs the server-side AI (starts immediately). */
+  createSolo() {
+    this.persistName();
+    this.client.createRoom(this.name, true);
   }
 
   join() {

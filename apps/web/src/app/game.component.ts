@@ -137,16 +137,34 @@ import { SoundService } from './sound.service';
             <section class="modal">
               <div class="eyebrow">match complete</div>
               <h2>{{ g.winnerId === g.selfPlayerId ? 'Victory' : 'Defeat' }}</h2>
-              @if (!opponent().connected) {
+              <table class="stats">
+                <thead>
+                  <tr><th></th><th>Turns</th><th>Cards</th><th>Kills</th><th>Dmg</th></tr>
+                </thead>
+                <tbody>
+                  @for (pid of g.playerOrder; track pid) {
+                    <tr>
+                      <td class="who">{{ g.players[pid].name }}</td>
+                      <td>{{ g.stats[pid].turnsTaken }}</td>
+                      <td>{{ g.stats[pid].cardsPlayed }}</td>
+                      <td>{{ g.stats[pid].unitsDestroyed }}</td>
+                      <td>{{ g.stats[pid].damageDealt }}</td>
+                    </tr>
+                  }
+                </tbody>
+              </table>
+              @if (isSolo()) {
+                <p>Solo match: the AI auto-rematches, so your confirmation starts the next match immediately.</p>
+              } @else if (!opponent().connected) {
                 <p>Your opponent has left the match — no rematch is possible. Return to the lobby to create or join a room.</p>
               } @else if (!rematchRequested()) {
                 <p>A two-player rematch handshake: both players must confirm.</p>
               } @else {
-                <p class="waiting">Waiting for your opponent to confirm the rematch…</p>
+                <p class="waiting">{{ isSolo() ? 'Starting rematch…' : 'Waiting for your opponent to confirm the rematch…' }}</p>
               }
               <div class="modal-actions">
                 @if (opponent().connected && !rematchRequested()) {
-                  <button class="primary" (click)="requestRematch()">Request rematch</button>
+                  <button class="primary" (click)="requestRematch()">{{ isSolo() ? 'Rematch vs AI' : 'Request rematch' }}</button>
                 }
                 <button class="ghost" (click)="client.leaveRoom()">Return to lobby</button>
               </div>
@@ -203,6 +221,11 @@ import { SoundService } from './sound.service';
     .modal-backdrop{position:fixed;inset:0;background:#000b;display:grid;place-items:center;padding:20px}.modal{background:#151a23;border:1px solid #3b4352;border-radius:18px;padding:28px;max-width:440px;text-align:center}.modal h2{font-size:48px;margin:4px}.modal p{color:#aeb6c5;line-height:1.5}.modal button{background:#d7b76c;border:0;padding:11px 18px;border-radius:9px;font-weight:800}.eyebrow{text-transform:uppercase;letter-spacing:.15em;color:#d7b76c;font-size:10px}
     @media(max-width:850px){.board{overflow-x:auto;grid-template-columns:repeat(4,180px);min-height:390px}.footer-grid{grid-template-columns:1fr}header{grid-template-columns:1fr auto}.turn{display:none}.playerbar{gap:10px}.game-shell{padding:8px}}
     .modal-actions{display:flex;gap:10px;justify-content:center;margin-top:12px}.modal-actions .ghost{background:transparent;color:#aeb6c5;border:1px solid #3e4655;padding:11px 18px;border-radius:9px}.modal .waiting{color:#d7b76c;min-height:1.5em}
+    /* Phase D D-2 — match summary stats in the victory modal. */
+    .stats{width:100%;margin:14px 0 4px;border-collapse:collapse;font-size:12px;color:#c1c7d2}
+    .stats th{font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:#687183;padding:4px 8px;border-bottom:1px solid #2d3441}
+    .stats td{padding:5px 8px;border-bottom:1px solid #222834;text-align:right}.stats td.who{text-align:left;color:#fff;font-weight:700}
+    .stats tr:last-child td{border-bottom:0}
     .primary{background:#d7b76c;color:#111;border-color:#d7b76c;border:0;padding:11px 18px;border-radius:9px;font-weight:800}
     /* Phase A.2 — header-right groups the sound toggle + End turn so the
        existing 3-column (2-column mobile) header grid is undisturbed. */
@@ -249,6 +272,8 @@ export class GameComponent {
     return g.playerOrder[0] === g.selfPlayerId ? g.playerOrder[1] : g.playerOrder[0];
   });
   readonly opponent = computed(() => this.game()!.players[this.opponentId()]);
+  /** Phase D D-1 — solo match: the opponent seat is the server-side AI (auto-rematches). */
+  readonly isSolo = computed(() => this.game()?.solo === true);
 
   /** Highest visual-event id already applied (Phase A.2). */
   private processedFx = 0;

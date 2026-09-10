@@ -72,9 +72,22 @@ Highest ROI order:
 1. pure core unit tests (actions, turn, combat, special readiness, building/power effects, win);
 2. server service/gateway integration tests for room membership and illegal actions;
 3. 2-socket smoke test;
-4. optional Playwright two-page e2e if time remains.
+4. browser e2e (`pnpm e2e`): two-client match smoke, reload rejoin, solo AI.
 
 UI unit-test breadth is lower priority than an actual two-client match smoke test.
+
+## Browser e2e (how to run)
+
+`pnpm e2e` (root script; **not** part of `pnpm verify` — it is slow) builds game-core, spawns isolated
+dev servers (Nest on `PORT=3111`, Angular on `:4222`), and drives the system Chrome via
+`puppeteer-core` (no bundled browser; override with `CHROME_PATH`). Each client gets an isolated browser
+context (a shared context shares localStorage and would hijack the other seat's rejoin session). The app
+loads with `?backendPort=3111`, which points Socket.IO at the isolated server port; without the parameter
+the defaults are unchanged (`:4200` → `:3000`, otherwise same origin). Ports are overridable via
+`E2E_SERVER_PORT` / `E2E_WEB_PORT`. Specs: (A) two clients create/join and play a full lock-step match to a
+shared Victory/Defeat; (B) two-player room, mid-match reload auto-rejoins with the board restored and no
+lobby flash (solo rooms are destroyed on human disconnect by design, so rejoin is only meaningful in 2P);
+(C) solo vs AI with the AI acting without human input and no console errors.
 
 ## Gotchas / non-obvious invariants
 

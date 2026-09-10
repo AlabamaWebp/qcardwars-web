@@ -118,10 +118,20 @@ const SESSION_GONE_CODES = new Set(['REJOIN_INVALID', 'REJOIN_EXPIRED', 'ROOM_NO
 export class GameClientService {
   private static readonly SESSION_KEY = 'qcw.session';
   private static readonly RECONNECT_NOTICE_MS = 3000;
+  /**
+   * How long the "Restoring session…" gate holds the lobby back when a stored
+   * session exists at boot. If the rejoin never resolves (e.g. the server is
+   * unreachable at boot, so the socket never connects), the gate is released so
+   * the user is not stuck forever. The stored session is kept, so the next
+   * successful connect still rejoins.
+   */
+  private static readonly RESTORE_TIMEOUT_MS = 5000;
 
   private readonly socket: Socket;
   private pendingRejoin = false;
   private reconnectNoticeTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Watchdog timer that releases the `restoring` gate (see RESTORE_TIMEOUT_MS). */
+  private restoringTimer: ReturnType<typeof setTimeout> | null = null;
   /** Last full view received, used to derive visual events (Phase A.2). */
   private lastView: ClientGameView | null = null;
   private fxSeq = 0;
@@ -138,15 +148,34 @@ export class GameClientService {
   readonly error = signal<ServerErrorView | null>(null);
   /** Brief "reconnected" notice after a successful socket reconnect + rejoin. */
   readonly reconnected = signal(false);
+  /**
+   * True while a stored session exists and the rejoin has not yet resolved
+   * (boot or reconnect). Lets the shell show a "restoring" placeholder
+   * instead of flashing the lobby until the socket round-trip completes.
+   */
+  readonly restoring = signal(false);
   readonly isMyTurn = computed(() => {
     const game = this.game();
     return Boolean(game && game.activePlayerId === game.selfPlayerId && game.status === 'playing');
   });
 
   constructor() {
+    // Socket.IO target: dev default is Angular :4200 -> Nest :3000; any other
+    // port (production LAN build) uses the same origin. The optional
+    // `?backendPort=NNNN` query parameter overrides the target for isolated
+    // port runs (the e2e suite); defaults are unchanged without it.
+    const backendPort = new URLSearchParams(location.search).get('backendPort');
     const devUrl = `${location.protocol}//${location.hostname}:3000`;
-    const url = location.port === '4200' ? devUrl : undefined;
+    const url = backendPort
+      ? `${location.protocol}//${location.hostname}:${backendPort}`
+      : location.port === '4200'
+        ? devUrl
+        : undefined;
     this.socket = io(url, { autoConnect: true, transports: ['websocket', 'polling'] });
+    // A stored session from a previous visit means the next connect will emit
+    // room:rejoin; hold the lobby back until that resolves (see `restoring`).
+    // The watchdog releases the gate if the rejoin never resolves (M1).
+    this.setRestoring(this.readStoredSession() !== null);
 
     this.socket.on('connect', () => {
       this.connected.set(true);
@@ -164,6 +193,7 @@ export class GameClientService {
     this.socket.on('session:identity', (value: SessionIdentity) => {
       this.playerId.set(value.playerId);
       this.storeSession({ code: value.roomCode, playerId: value.playerId, token: value.token });
+      this.setRestoring(false);
       if (this.pendingRejoin) {
         this.pendingRejoin = false;
         this.reconnected.set(true);
@@ -174,6 +204,7 @@ export class GameClientService {
     this.socket.on('session:cleared', () => {
       this.pendingRejoin = false;
       this.storeSession(null);
+      this.setRestoring(false);
       this.resetLocalSession();
     });
     this.socket.on('room:state', (value: RoomView) => this.room.set(value));
@@ -198,21 +229,30 @@ export class GameClientService {
       }
     });
     this.socket.on('server:error', (value: ServerErrorView) => {
+      if (value && value.code === 'STALE_REVISION') {
+        // Recoverable no-op: the action was based on a revision the server had
+        // already passed (e.g. two tabs of the same seat, or a missed
+        // broadcast). The server ignored it and re-sent the current view right
+        // after this error, so the next action will use the fresh revision.
+        // No banner: this is normal protocol, not a user mistake.
+        return;
+      }
       if (value && SESSION_GONE_CODES.has(value.code)) {
         // A failed rejoin means the stored session is gone: back to the lobby.
         // Clear the session FIRST so resetLocalSession() doesn't wipe the
         // error we are about to surface (the lobby must show it).
         this.pendingRejoin = false;
         this.storeSession(null);
+        this.setRestoring(false);
         this.resetLocalSession();
       }
       this.error.set(value);
     });
   }
 
-  createRoom(name: string) {
+  createRoom(name: string, solo = false) {
     this.error.set(null);
-    this.socket.emit('room:create', { name });
+    this.socket.emit('room:create', { name, solo });
   }
 
   joinRoom(code: string, name: string) {
@@ -239,6 +279,35 @@ export class GameClientService {
 
   clearError() {
     this.error.set(null);
+  }
+
+  /**
+   * Manually release the "Restoring session…" gate (the lobby's "Go to lobby"
+   * button). The stored session is intentionally kept, so a later successful
+   * connect still rejoins the room.
+   */
+  cancelRestore(): void {
+    this.setRestoring(false);
+  }
+
+  /**
+   * Set the `restoring` gate and (re)arm its watchdog. While the gate is up and
+   * no resolution arrives within {@link RESTORE_TIMEOUT_MS} (e.g. the server is
+   * unreachable at boot), the gate releases itself so the lobby is never hidden
+   * forever. Resolutions (identity/clear/session-gone) clear the watchdog.
+   */
+  private setRestoring(value: boolean): void {
+    this.restoring.set(value);
+    if (this.restoringTimer) {
+      clearTimeout(this.restoringTimer);
+      this.restoringTimer = null;
+    }
+    if (value) {
+      this.restoringTimer = setTimeout(() => {
+        this.restoringTimer = null;
+        this.restoring.set(false);
+      }, GameClientService.RESTORE_TIMEOUT_MS);
+    }
   }
 
   private resetLocalSession() {

@@ -1155,3 +1155,173 @@ describe('catalog coverage (B-4, updated for Phase C)', () => {
     for (const id of ids) expect(CARD_BY_ID.has(id)).toBe(true);
   });
 });
+
+describe('Phase D LOW-5: dot replacement, heal clamp, contested-lane attack bonus', () => {
+  it('a second dot REPLACES the first (dots never stack)', () => {
+    let state = game(9);
+    state = setActive(state, 'p1');
+    // A healthy enemy unit on the combine lane to poison twice.
+    state.lanes[1].sides.p2.unit = {
+      uid: 'victim',
+      cardId: 'combine-metrocop',
+      ownerId: 'p2',
+      attack: 2,
+      health: 5,
+      maxHealth: 5,
+      turnsSurvived: 1,
+      specialUsesRemaining: 0,
+    };
+    // Venom: dot 2/2.
+    state = playCard(state, 'p1', 'power-venom', 1);
+    expect(state.lanes[1].sides.p2.unit!.dot).toEqual({ amount: 2, turns: 2 });
+    // Rot: dot 1/3. Must replace venom, not stack into 3/5.
+    state = playCard(state, 'p1', 'power-rot', 1);
+    expect(state.lanes[1].sides.p2.unit!.dot).toEqual({ amount: 1, turns: 3 });
+  });
+
+  it('building passive heal restores a wounded unit but clamps at maxHealth', () => {
+    let state = game(9);
+    state = setActive(state, 'p2'); // so ending p2's turn starts p1's turn
+    // Wounded p1 unit (4/5) + Field Hospital (+1 at turn start) on the rebel lane.
+    state.lanes[2].sides.p1.unit = {
+      uid: 'medic',
+      cardId: 'rebel-medic',
+      ownerId: 'p1',
+      attack: 2,
+      health: 4,
+      maxHealth: 5,
+      turnsSurvived: 1,
+      specialUsesRemaining: 0,
+    };
+    state.lanes[2].sides.p1.building = { uid: 'hospital', cardId: 'building-field-hospital', ownerId: 'p1' };
+
+    state = endTurn(state, 'p2'); // starts p1's turn → heal 4→5
+    expect(state.lanes[2].sides.p1.unit!.health).toBe(5);
+
+    // A full-heal turn must NOT over-heal past maxHealth (5, not 6).
+    state = endTurn(state, 'p1'); // p1 ends → p2's turn
+    state = endTurn(state, 'p2'); // p2 ends → p1's turn (heal attempt again)
+    expect(state.lanes[2].sides.p1.unit!.health).toBe(5);
+  });
+
+  it('attack-bonus-own-lane adds +2 to a contested-lane attack (not the open lane)', () => {
+    let state = game(9);
+    state = setActive(state, 'p1');
+    // p1 unit (2 ATK) + Power Substation (+2) on the combine lane, contested by p2.
+    state.lanes[1].sides.p1.unit = {
+      uid: 'attacker',
+      cardId: 'combine-metrocop',
+      ownerId: 'p1',
+      attack: 2,
+      health: 5,
+      maxHealth: 5,
+      turnsSurvived: 1,
+      specialUsesRemaining: 0,
+    };
+    state.lanes[1].sides.p1.building = { uid: 'substation', cardId: 'building-power-substation', ownerId: 'p1' };
+    state.lanes[1].sides.p2.unit = {
+      uid: 'defender',
+      cardId: 'combine-metrocop',
+      ownerId: 'p2',
+      attack: 2,
+      health: 5,
+      maxHealth: 5,
+      turnsSurvived: 1,
+      specialUsesRemaining: 0,
+    };
+
+    state = endTurn(state, 'p1'); // p1 attacks: 2 base + 2 substation = 4 to the defender
+    const defender = state.lanes[1].sides.p2.unit;
+    expect(defender).not.toBeNull();
+    expect(defender!.health).toBe(1); // 5 - 4, so the +2 bonus was applied
+    // The bonus only buffs the attacker; p1's unit took no retaliation.
+    expect(state.lanes[1].sides.p1.unit!.health).toBe(5);
+  });
+});
+
+describe('Phase D D-2: match summary stats', () => {
+  it('tracks turnsTaken and cardsPlayed, and exposes stats in the client view', () => {
+    const fresh = game(); // seed even → p1 opens: the opening turn is already counted
+    expect(fresh.stats.p1).toEqual({ turnsTaken: 1, cardsPlayed: 0, unitsDestroyed: 0, damageDealt: 0 });
+    expect(fresh.stats.p2).toEqual({ turnsTaken: 0, cardsPlayed: 0, unitsDestroyed: 0, damageDealt: 0 });
+
+    let state = fresh;
+    state = setActive(state, 'p1');
+    state = playCard(state, 'p1', 'combine-metrocop', 1);
+    state = endTurn(state, 'p1'); // p2's turn starts
+    state = endTurn(state, 'p2'); // p1's turn starts again
+    expect(state.stats.p1.turnsTaken).toBe(2);
+    expect(state.stats.p2.turnsTaken).toBe(1);
+    expect(state.stats.p1.cardsPlayed).toBe(1);
+    expect(state.stats.p2.cardsPlayed).toBe(0);
+
+    // Both players see both stats blocks (aggregates are public).
+    const view = toClientView(state, 'p1');
+    expect(view.stats.p1).toEqual(state.stats.p1);
+    expect(view.stats.p2).toEqual(state.stats.p2);
+  });
+
+  it('credits combat damage (building bonus + open-lane hero hits) and kills', () => {
+    let state = game();
+    state = setActive(state, 'p1');
+    state.lanes[1].sides.p1.unit = {
+      uid: 'a1', cardId: 'combine-metrocop', ownerId: 'p1',
+      attack: 2, health: 5, maxHealth: 5, turnsSurvived: 1, specialUsesRemaining: 0,
+    };
+    state.lanes[1].sides.p1.building = { uid: 'b1', cardId: 'building-power-substation', ownerId: 'p1' };
+    state.lanes[1].sides.p2.unit = {
+      uid: 'd1', cardId: 'combine-metrocop', ownerId: 'p2',
+      attack: 1, health: 3, maxHealth: 3, turnsSurvived: 1, specialUsesRemaining: 0,
+    };
+    state.lanes[0].sides.p1.unit = {
+      uid: 'a0', cardId: 'antlion-spitter', ownerId: 'p1',
+      attack: 3, health: 4, maxHealth: 4, turnsSurvived: 1, specialUsesRemaining: 0,
+    };
+    const hpBefore = state.players.p2.hp;
+    state = endTurn(state, 'p1'); // lane 1: 2+2=4 kills the 3-HP defender; lane 0: 3 direct
+    expect(state.players.p2.hp).toBe(hpBefore - 3);
+    expect(state.stats.p1.damageDealt).toBe(7); // 4 (unit) + 3 (hero)
+    expect(state.stats.p1.unitsDestroyed).toBe(1);
+    expect(state.stats.p2.damageDealt).toBe(0);
+    expect(state.stats.p2.unitsDestroyed).toBe(0);
+  });
+
+  it('credits dot damage and dot kills to the dot owner (the opponent)', () => {
+    let state = game();
+    state = setActive(state, 'p1');
+    state.lanes[1].sides.p2.unit = {
+      uid: 'v', cardId: 'combine-metrocop', ownerId: 'p2',
+      attack: 1, health: 2, maxHealth: 2, turnsSurvived: 1, specialUsesRemaining: 0,
+    };
+    state = playCard(state, 'p1', 'power-venom', 1); // dot 2/2
+    state = endTurn(state, 'p1'); // p2's turn starts → dot tick kills the 2-HP unit
+    expect(state.lanes[1].sides.p2.unit).toBeNull();
+    expect(state.stats.p1.damageDealt).toBe(2);
+    expect(state.stats.p1.unitsDestroyed).toBe(1);
+    expect(state.stats.p2.damageDealt).toBe(0);
+  });
+
+  it('aoe self-hit is not counted as damage dealt and the death is credited to nobody (L1)', () => {
+    let state = game();
+    state = setActive(state, 'p1');
+    // p1's own unit in lane 1 is low HP (the aoe self-hit kills it); p2's unit
+    // is high HP (it survives the aoe).
+    state.lanes[1].sides.p1.unit = {
+      uid: 'own', cardId: 'combine-metrocop', ownerId: 'p1',
+      attack: 1, health: 1, maxHealth: 3, turnsSurvived: 1, specialUsesRemaining: 0,
+    };
+    state.lanes[1].sides.p2.unit = {
+      uid: 'foe', cardId: 'combine-metrocop', ownerId: 'p2',
+      attack: 1, health: 5, maxHealth: 5, turnsSurvived: 1, specialUsesRemaining: 0,
+    };
+    state = playCard(state, 'p1', 'power-scorch', 1); // aoe amount 2
+    expect(state.lanes[1].sides.p1.unit).toBeNull(); // self-hit destroyed it
+    expect(state.lanes[1].sides.p2.unit?.health).toBe(3); // opponent unit survived
+    // Only the hit on the opponent is "damage dealt"; the self-hit is not counted.
+    expect(state.stats.p1.damageDealt).toBe(2);
+    // The self-destroyed unit is credited to nobody: the opponent did NOT kill it.
+    expect(state.stats.p2.unitsDestroyed).toBe(0);
+    // p1's aoe did not destroy any enemy unit (p2's survived), so no kill credit.
+    expect(state.stats.p1.unitsDestroyed).toBe(0);
+  });
+});

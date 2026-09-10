@@ -145,6 +145,22 @@ export interface GameLogEntry {
   text: string;
 }
 
+/**
+ * Per-player match statistics (Phase D, D-2). Accumulated deterministically by
+ * the engine and shown in the end-of-match summary. Public to both players —
+ * they are aggregates, not hidden information.
+ */
+export interface PlayerStats {
+  /** Turns this player started (the opening turn counts). */
+  turnsTaken: number;
+  /** Cards played from hand (special activations do not count). */
+  cardsPlayed: number;
+  /** Enemy units destroyed as a result of this player's actions. */
+  unitsDestroyed: number;
+  /** Damage dealt to enemy units and the enemy hero (including dot ticks). */
+  damageDealt: number;
+}
+
 export interface GameState {
   roomCode: string;
   status: 'playing' | 'finished';
@@ -159,6 +175,7 @@ export interface GameState {
   config: GameConfig;
   seed: number;
   nextUid: number;
+  stats: Record<PlayerId, PlayerStats>;
 }
 
 export type GameAction =
@@ -229,6 +246,13 @@ export interface ClientGameView {
   winnerId: PlayerId | null;
   log: GameLogEntry[];
   config: GameConfig;
+  stats: Record<PlayerId, PlayerStats>;
+  /**
+   * True when at least one seat is an AI (a solo match). Derived by the server
+   * from the room's seat configuration (L3) rather than the client matching the
+   * AI's display name, which would break if the AI name changed.
+   */
+  solo: boolean;
 }
 
 export class GameRuleError extends Error {

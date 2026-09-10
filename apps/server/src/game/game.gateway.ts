@@ -14,6 +14,8 @@ import { GameService, Room } from './game.service';
 interface RoomCreatePayload {
   name: string;
   seed?: number;
+  /** Solo match: the second seat is filled by the server-side AI. */
+  solo?: boolean;
 }
 
 interface RoomJoinPayload {
@@ -60,7 +62,7 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
   @SubscribeMessage('room:create')
   createRoom(@ConnectedSocket() client: Socket, @MessageBody() payload: RoomCreatePayload) {
     return this.guard(client, () => {
-      const { room, playerId, token } = this.games.createRoom(client.id, payload?.name, payload?.seed);
+      const { room, playerId, token } = this.games.createRoom(client.id, payload?.name, payload?.seed, payload?.solo);
       client.join(room.code);
       client.emit('session:identity', { playerId, roomCode: room.code, token });
       this.broadcastRoom(room);
