@@ -114,6 +114,7 @@ function findReadySpecial(view: ClientGameView): { laneIndex: number; targetLane
 async function actForClient(actor: Client, other: Client): Promise<'unit' | 'special' | 'power' | 'end-turn'> {
   const view = actor.view!;
   const me = view.selfPlayerId;
+  const opp = view.playerOrder.find((id) => id !== me)!;
   const hand = view.players[me].hand!;
   const mana = view.players[me].mana;
   // 1) cheapest affordable unit on a free, faction-allowed lane
@@ -122,7 +123,14 @@ async function actForClient(actor: Client, other: Client): Promise<'unit' | 'spe
     const def = getCard(h.cardId);
     if (def.kind !== 'unit' || def.cost > mana) continue;
     const lane = laneFor(def, me, view);
-    if (lane !== null) { unit = { h, def, lane }; break; }
+    if (lane === null) continue;
+    // onPlay 'enemy-unit' cards must be played into a lane already holding the
+    // opponent's unit — mirrors the engine's atomic INVALID_TARGET check (see
+    // playUnit). Emitting such a play without the occupant would be rejected
+    // server-side, the revision would never advance, and lock-step would wedge.
+    if (def.onPlay?.target === 'enemy-unit' && !view.lanes[lane].sides[opp].unit) continue;
+    unit = { h, def, lane };
+    break;
   }
   if (unit) {
     actor.socket.emit('game:action', {

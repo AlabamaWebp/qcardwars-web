@@ -1127,9 +1127,12 @@ describe('catalog coverage (B-4, updated for Phase C)', () => {
     return [];
   }
 
-  it('stays in the 70-75 card window with no faction below 6 cards', () => {
+  it('stays in the 70-90 card window with no faction below 6 cards', () => {
+    // M2 added 15 cards (72 -> 87). The window is kept loose so further content
+    // can land without touching this guard; the per-faction floor is the real
+    // balance signal.
     expect(CARD_CATALOG.length).toBeGreaterThanOrEqual(70);
-    expect(CARD_CATALOG.length).toBeLessThanOrEqual(75);
+    expect(CARD_CATALOG.length).toBeLessThanOrEqual(90);
     for (const faction of LANE_TYPES) {
       expect(
         CARD_CATALOG.filter((card) => card.faction === faction).length,
@@ -1138,7 +1141,7 @@ describe('catalog coverage (B-4, updated for Phase C)', () => {
     }
     const universals = CARD_CATALOG.filter((card) => card.faction === 'universal').length;
     expect(universals).toBeGreaterThanOrEqual(11);
-    expect(universals).toBeLessThanOrEqual(13);
+    expect(universals).toBeLessThanOrEqual(20);
   });
 
   it('has 10+ buildings, at least one per lane type, and costs spanning 1-8', () => {
@@ -2102,5 +2105,242 @@ describe('M1 rule changes', () => {
         },
       );
     });
+  });
+});
+
+describe('M2 catalog: 15 new cards', () => {
+  function gameWithLanes(seed: number, laneTypes: readonly string[]): ReturnType<typeof game> {
+    return createGame({
+      roomCode: 'M2',
+      players: [
+        { id: 'p1', name: 'Alice' },
+        { id: 'p2', name: 'Bob' },
+      ],
+      seed,
+      config: { laneTypes: laneTypes as readonly LaneType[] },
+    });
+  }
+
+  it('all 15 M2 card ids exist with the intended kind and faction', () => {
+    const specs: Array<[string, CardDefinition['kind'], CardDefinition['faction']]> = [
+      ['power-stasis-field', 'power', 'universal'],
+      ['power-terror-raid', 'power', 'universal'],
+      ['universal-demolition-volunteer', 'unit', 'universal'],
+      ['universal-drill-sergeant', 'unit', 'universal'],
+      ['antlion-tunnel-harrier', 'unit', 'antlion'],
+      ['antlion-chitin-skirmisher', 'unit', 'antlion'],
+      ['antlion-nectar-swarm', 'unit', 'antlion'],
+      ['combine-riot-marshal', 'unit', 'combine'],
+      ['combine-metro-bouncer', 'unit', 'combine'],
+      ['rebel-propaganda-runner', 'unit', 'rebel'],
+      ['rebel-wrench-tinker', 'unit', 'rebel'],
+      ['zombie-rotting-warden', 'unit', 'zombie'],
+      ['zombie-plague-bearer', 'unit', 'zombie'],
+      ['wraith-phantom-harrier', 'unit', 'wraith'],
+      ['guardian-sacred-sentinel', 'unit', 'guardian'],
+    ];
+    for (const [id, kind, faction] of specs) {
+      const card = CARD_BY_ID.get(id);
+      expect(card, `${id} should exist`).toBeDefined();
+      expect(card!.kind, `${id} kind`).toBe(kind);
+      expect(card!.faction, `${id} faction`).toBe(faction);
+    }
+  });
+
+  it('Stasis Field stuns an enemy unit for 1 turn (power, enemy-unit)', () => {
+    let state = game(240);
+    state = setActive(state, 'p1');
+    state.lanes[1].sides.p2.unit = {
+      uid: 'foe', cardId: 'combine-metrocop', ownerId: 'p2',
+      attack: 2, health: 3, maxHealth: 3, turnsSurvived: 1, specialUsesRemaining: 0,
+    };
+    state = playCard(state, 'p1', 'power-stasis-field', 1);
+    expect(state.lanes[1].sides.p2.unit?.stun).toEqual({ turns: 1 });
+  });
+
+  it('Terror Raid forces the enemy to discard 2 random cards (power, none)', () => {
+    let state = game(242);
+    state = setActive(state, 'p1');
+    const p2HandBefore = state.players.p2.hand.length;
+    const p2DiscardBefore = state.players.p2.discard.length;
+    state = playCard(state, 'p1', 'power-terror-raid');
+    expect(state.players.p2.hand).toHaveLength(p2HandBefore - 2);
+    expect(state.players.p2.discard).toHaveLength(p2DiscardBefore + 2);
+  });
+
+  it('Demolition Volunteer gets +1 ATK per other friendly (swarm 1)', () => {
+    let state = game(244);
+    state = setActive(state, 'p1');
+    state.lanes[1].sides.p1.unit = {
+      uid: 'ally', cardId: 'combine-metrocop', ownerId: 'p1',
+      attack: 1, health: 3, maxHealth: 3, turnsSurvived: 1, specialUsesRemaining: 0,
+    };
+    state = playCard(state, 'p1', 'universal-demolition-volunteer', 0);
+    expect(state.lanes[0].sides.p1.unit?.cardId).toBe('universal-demolition-volunteer');
+    expect(effectiveAttack(state, state.lanes[0], 'p1')).toBe(4); // 3 base + 1 swarm x 1 friendly
+  });
+
+  it('Drill Sergeant buffs itself +1/+1 on play (onPlay self)', () => {
+    let state = game(243);
+    state = setActive(state, 'p1');
+    state = playCard(state, 'p1', 'universal-drill-sergeant', 1);
+    const unit = state.lanes[1].sides.p1.unit!;
+    expect(unit.cardId).toBe('universal-drill-sergeant');
+    expect(unit.attack).toBe(2); // 1 + 1
+    expect(unit.health).toBe(4); // 3 + 1
+    expect(unit.maxHealth).toBe(4); // 3 + 1
+  });
+
+  it('Tunnel Harrier saps the enemy unit -1 ATK on play (onPlay enemy-unit)', () => {
+    let state = game(246);
+    state = setActive(state, 'p1');
+    state.lanes[0].sides.p2.unit = {
+      uid: 'foe', cardId: 'combine-metrocop', ownerId: 'p2',
+      attack: 3, health: 4, maxHealth: 4, turnsSurvived: 1, specialUsesRemaining: 0,
+    };
+    state = playCard(state, 'p1', 'antlion-tunnel-harrier', 0);
+    expect(state.lanes[0].sides.p2.unit?.attack).toBe(2); // 3 - 1
+    expect(state.lanes[0].sides.p1.unit?.cardId).toBe('antlion-tunnel-harrier');
+  });
+
+  it('Chitin Skirmisher saps the enemy unit -2 ATK on play (onPlay enemy-unit)', () => {
+    let state = game(247);
+    state = setActive(state, 'p1');
+    state.lanes[0].sides.p2.unit = {
+      uid: 'foe', cardId: 'combine-metrocop', ownerId: 'p2',
+      attack: 3, health: 4, maxHealth: 4, turnsSurvived: 1, specialUsesRemaining: 0,
+    };
+    state = playCard(state, 'p1', 'antlion-chitin-skirmisher', 0);
+    expect(state.lanes[0].sides.p2.unit?.attack).toBe(1); // 3 - 2
+  });
+
+  it('Nectar Swarm gets +2 ATK per other friendly (swarm 2)', () => {
+    let state = game(256);
+    state = setActive(state, 'p1');
+    state.lanes[1].sides.p1.unit = {
+      uid: 'ally', cardId: 'combine-metrocop', ownerId: 'p1',
+      attack: 1, health: 3, maxHealth: 3, turnsSurvived: 1, specialUsesRemaining: 0,
+    };
+    state = playCard(state, 'p1', 'antlion-nectar-swarm', 0);
+    expect(state.lanes[0].sides.p1.unit?.cardId).toBe('antlion-nectar-swarm');
+    expect(effectiveAttack(state, state.lanes[0], 'p1')).toBe(4); // 2 base + 2 swarm x 1 friendly
+  });
+
+  it('Metro Riot Marshal draws 1 on play (onPlay none-draw)', () => {
+    let state = game(230);
+    state = setActive(state, 'p1');
+    const handBefore = state.players.p1.hand.length;
+    state = playCard(state, 'p1', 'combine-riot-marshal', 1);
+    // giveCard +1, playing -1, onPlay draw +1 -> net +1.
+    expect(state.players.p1.hand).toHaveLength(handBefore + 1);
+    expect(state.lanes[1].sides.p1.unit?.cardId).toBe('combine-riot-marshal');
+  });
+
+  it("Metro Bouncer bounces an enemy unit to its owner's hand (combine lane, special)", () => {
+    let state = game(255);
+    state = setActive(state, 'p1');
+    state = playCard(state, 'p1', 'combine-metro-bouncer', 1);
+    state = structuredClone(state);
+    state.lanes[1].sides.p1.unit!.turnsSurvived = 1; // ready to activate
+    state.lanes[1].sides.p2.unit = {
+      uid: 'foe', cardId: 'combine-metrocop', ownerId: 'p2',
+      attack: 2, health: 3, maxHealth: 3, turnsSurvived: 1, specialUsesRemaining: 0,
+    };
+    const p2HandBefore = state.players.p2.hand.length;
+    state = activateSpecial(state, 'p1', 1, 1);
+    expect(state.lanes[1].sides.p2.unit).toBeNull();
+    expect(state.players.p2.hand).toHaveLength(p2HandBefore + 1);
+    expect(state.players.p2.hand.some((c) => c.cardId === 'combine-metrocop')).toBe(true);
+    expect(state.lanes[1].sides.p1.unit?.specialUsesRemaining).toBe(0); // exhausted
+  });
+
+  it('Propaganda Runner deals 1 hero damage on play (onPlay enemy-hero)', () => {
+    let state = game(245);
+    state = setActive(state, 'p1');
+    const hpBefore = state.players.p2.hp;
+    state = playCard(state, 'p1', 'rebel-propaganda-runner', 2);
+    expect(state.lanes[2].sides.p1.unit?.cardId).toBe('rebel-propaganda-runner');
+    expect(state.players.p2.hp).toBe(hpBefore - 1);
+  });
+
+  it('Wrench Tinker draws 1 when a combat kill destroys it (drawOnKill)', () => {
+    let state = game(257);
+    state = setActive(state, 'p1');
+    state = playCard(state, 'p1', 'rebel-wrench-tinker', 2);
+    state = structuredClone(state);
+    state.lanes[2].sides.p1.unit!.turnsSurvived = 1; // ready to attack
+    state.lanes[2].sides.p2.unit = {
+      uid: 'foe', cardId: 'combine-metrocop', ownerId: 'p2',
+      attack: 1, health: 2, maxHealth: 2, turnsSurvived: 1, specialUsesRemaining: 0,
+    };
+    const handBefore = state.players.p1.hand.length;
+    state = endTurn(state, 'p1'); // tinker (2 ATK) kills the 2-HP foe -> drawOnKill 1
+    expect(state.lanes[2].sides.p2.unit).toBeNull();
+    expect(state.players.p1.hand).toHaveLength(handBefore + 1);
+    expect(state.log.some((e) => /draws 1 card\(s\) from the kill/.test(e.text))).toBe(true);
+  });
+
+  it('Rotting Warden poisons the enemy unit 2/2 on play (onPlay enemy-unit dot)', () => {
+    let state = game(249);
+    state = setActive(state, 'p1');
+    state.lanes[3].sides.p2.unit = {
+      uid: 'foe', cardId: 'combine-metrocop', ownerId: 'p2',
+      attack: 2, health: 5, maxHealth: 5, turnsSurvived: 1, specialUsesRemaining: 0,
+    };
+    state = playCard(state, 'p1', 'zombie-rotting-warden', 3);
+    expect(state.lanes[3].sides.p2.unit?.dot).toEqual({ amount: 2, turns: 2 });
+  });
+
+  it('Plague Bearer poisons the enemy unit 3/2 on play (onPlay enemy-unit dot)', () => {
+    let state = game(252);
+    state = setActive(state, 'p1');
+    state.lanes[3].sides.p2.unit = {
+      uid: 'foe', cardId: 'combine-metrocop', ownerId: 'p2',
+      attack: 2, health: 6, maxHealth: 6, turnsSurvived: 1, specialUsesRemaining: 0,
+    };
+    state = playCard(state, 'p1', 'zombie-plague-bearer', 3);
+    expect(state.lanes[3].sides.p2.unit?.dot).toEqual({ amount: 3, turns: 2 });
+  });
+
+  it('an onPlay enemy-unit card fails atomically into an empty lane', () => {
+    let blocked = game(248);
+    blocked = setActive(blocked, 'p1');
+    const provided = giveCard(blocked, 'p1', 'antlion-tunnel-harrier');
+    expect(
+      ruleCode(() =>
+        applyAction(provided.state, {
+          type: 'play-card',
+          playerId: 'p1',
+          expectedRevision: provided.state.revision,
+          handCardUid: provided.uid,
+          laneIndex: 0,
+        }),
+      ),
+    ).toBe('INVALID_TARGET');
+  });
+
+  it('Phantom Harrier stuns the enemy unit 1 on play (wraith lane, onPlay enemy-unit)', () => {
+    let state = gameWithLanes(253, ['antlion', 'combine', 'guardian', 'wraith']);
+    state = setActive(state, 'p1');
+    state.lanes[3].sides.p2.unit = {
+      uid: 'foe', cardId: 'combine-metrocop', ownerId: 'p2',
+      attack: 2, health: 5, maxHealth: 5, turnsSurvived: 1, specialUsesRemaining: 0,
+    };
+    state = playCard(state, 'p1', 'wraith-phantom-harrier', 3); // wraith lane is index 3
+    expect(state.lanes[3].sides.p2.unit?.stun).toEqual({ turns: 1 });
+  });
+
+  it("Sacred Sentinel's Aegis blesses itself +2/+2 (guardian lane, special self)", () => {
+    let state = gameWithLanes(254, ['antlion', 'combine', 'guardian', 'wraith']);
+    state = setActive(state, 'p1');
+    state = playCard(state, 'p1', 'guardian-sacred-sentinel', 2); // guardian lane is index 2
+    state = structuredClone(state);
+    state.lanes[2].sides.p1.unit!.turnsSurvived = 1; // ready to activate
+    state = activateSpecial(state, 'p1', 2, 2);
+    const sentinel = state.lanes[2].sides.p1.unit!;
+    expect(sentinel.attack).toBe(6); // 4 + 2
+    expect(sentinel.health).toBe(8); // 6 + 2
+    expect(sentinel.maxHealth).toBe(8); // 6 + 2
+    expect(sentinel.specialUsesRemaining).toBe(0);
   });
 });

@@ -169,3 +169,45 @@ describe('Phase D D-1: chooseAiAction', () => {
     expect(chooseAiAction(b, 'p2')).toEqual(chooseAiAction(a, 'p2'));
   });
 });
+
+describe('M2 catalog: AI plays the new cards legally', () => {
+  it('plays the highest-cost new M2 unit legally and it applies cleanly', () => {
+    let state = aiTurn(game());
+    state.players.p2.hand = []; // hermetic: ignore the initial draw
+    const sergeant = giveCard(state, 'p2', 'universal-drill-sergeant'); // cost 1, universal
+    state = sergeant.state;
+    const marshal = giveCard(state, 'p2', 'combine-riot-marshal'); // cost 4, combine
+    state = marshal.state;
+
+    const action = chooseAiAction(state, 'p2');
+    expect(action?.type).toBe('play-card');
+    if (action?.type === 'play-card') {
+      expect(action.handCardUid).toBe(marshal.uid); // highest-cost first
+      expect(action.laneIndex).toBe(1); // combine lane
+    }
+    const next = applyAction(state, action!);
+    expect(next.lanes[1].sides.p2.unit?.cardId).toBe('combine-riot-marshal');
+  });
+
+  it('targets an occupied lane with the new universal Stasis Field power', () => {
+    let state = aiTurn(game());
+    state.players.p2.hand = []; // hermetic: ignore the initial draw
+    state.players.p2.mana = 3;
+    state = structuredClone(state);
+    placeUnit(state, 0, 'p1', 'bucket', 1); // legal enemy target in lane 0
+    const stasis = giveCard(state, 'p2', 'power-stasis-field'); // cost 2, enemy-unit
+    state = stasis.state;
+
+    const action = chooseAiAction(state, 'p2');
+    expect(action).toEqual({
+      type: 'play-card',
+      playerId: 'p2',
+      expectedRevision: state.revision,
+      handCardUid: stasis.uid,
+      laneIndex: 0,
+      targetLaneIndex: 0,
+    });
+    const next = applyAction(state, action);
+    expect(next.lanes[0].sides.p1.unit?.stun).toEqual({ turns: 1 });
+  });
+});
