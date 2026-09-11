@@ -1130,7 +1130,7 @@ export const CARD_CATALOG: readonly CardDefinition[] = [
     faction: 'rebel',
     tier: 2,
     cost: 3,
-    description: 'When destroyed, scrambles a spare part into your hand: draw 1.',
+    description: 'When it destroys an enemy unit in combat, it scrambles a spare part into your hand: draw 1.',
     attack: 2,
     health: 3,
     drawOnKill: 1,

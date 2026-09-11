@@ -1789,6 +1789,7 @@ describe('M1 rule changes', () => {
           let state = game(76);
           state = setActive(state, 'p1');
           state = placeUnit(state, 1, 'p2', 'combine-metrocop', 9, 3, 2); // buffed to 9
+          state.lanes[1].sides.p2.unit.dot = { amount: 2, turns: 3 }; // dot must not survive the bounce
           const handBefore = state.players.p2.hand.length;
           state = playCard(state, 'p1', 'test-bounce', 1, 1);
           expect(state.lanes[1].sides.p2.unit).toBeNull();
