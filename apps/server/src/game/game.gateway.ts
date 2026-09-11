@@ -29,8 +29,6 @@ interface RoomJoinPayload {
 interface RoomRejoinPayload {
   code: string;
   token: string;
-  /** Seat id from the stored session; lets the server recover superseded tokens. */
-  playerId?: string;
 }
 
 interface SessionIdentity {
@@ -96,7 +94,6 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
         client.id,
         payload?.code ?? '',
         payload?.token ?? '',
-        payload?.playerId,
       );
       client.join(room.code);
       client.emit('session:identity', { playerId: player.playerId, roomCode: room.code, token });

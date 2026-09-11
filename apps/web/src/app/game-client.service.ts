@@ -186,9 +186,7 @@ export class GameClientService {
       const session = this.readStoredSession();
       if (session) {
         this.pendingRejoin = true;
-        // The playerId lets the server recover a seat whose token was
-        // superseded by a faster rejoin from the same seat (reload race).
-        this.socket.emit('room:rejoin', { code: session.code, token: session.token, playerId: session.playerId });
+        this.socket.emit('room:rejoin', { code: session.code, token: session.token });
       }
     });
     this.socket.on('disconnect', () => this.connected.set(false));

@@ -367,7 +367,7 @@ async function specSoloAi(browser) {
   const toggleLane = (label) =>
     page.evaluate((text) => {
       const chip = [...document.querySelectorAll('qcw-lobby .lane-chip')].find(
-        (c) => (c.textContent ?? '').trim().toLowerCase() === text,
+        (c) => c.querySelector('.lane-chip__name')?.textContent?.trim().toLowerCase() === text,
       );
       if (!chip) throw new Error(`lane chip "${text}" not found`);
       chip.click();

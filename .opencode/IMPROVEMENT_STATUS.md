@@ -29,10 +29,9 @@ Last updated: **End task (END-1, selectable lanes) COMPLETE — reviewer PASS (n
   other player (hand identities remain hidden, count only). SPEC.md updated to match.
 - Rejoin: grace-token via localStorage; pre-game seat kept with `connected:false`; in-game timeout auto-forfeits
   to the remaining connected player. Timeout configurable, default 120s.
-- Rejoin race: `room:rejoin` carries `{ code, token, playerId }`. A superseded (stale) token can still reclaim
-  its seat via `playerId`, but only while the seat is disconnected AND a live grace window is armed for that
-  seat — a live seat can never be hijacked, and a departed/expired seat can never be claimed (REJOIN_INVALID).
-  REJOIN_EXPIRED still takes precedence over the fallback.
+- Rejoin: `room:rejoin` carries `{ code, token }`. The opaque, current token is the only credential; a stale or
+  bogus token cannot reclaim a seat using its public `playerId` (REJOIN_INVALID). Normal reloads retain the current
+  token and rejoin within the grace window; an expired valid token still reports REJOIN_EXPIRED.
 - Deferred forfeit: if a seat's grace lapses while the other seat is still inside its own grace, the forfeit is
   deferred; it re-evaluates the moment the other seat rejoins (rejoiner wins immediately if the lapsed seat has
   no live grace) — no stuck `playing` match.

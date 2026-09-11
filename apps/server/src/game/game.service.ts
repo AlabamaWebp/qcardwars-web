@@ -244,26 +244,24 @@ export class GameService {
    * new socket, restores `connected`, and returns a fresh single-use token.
    * Throws GameRuleError REJOIN_INVALID / REJOIN_EXPIRED / ROOM_NOT_FOUND.
    *
-   * Stale-token fallback: a client can transiently hold a superseded token
-   * (a page reload that raced a faster rejoin from the same seat rotates the
-   * token before the slow client's `room:rejoin` arrives). Instead of
-   * stranding the seat, the server reissues the token for the seat the client
-   * names (`playerId`) — but only while that seat is still disconnected, so a
-   * stale client can never hijack a live seat, and a seat whose grace window
-   * has lapsed (or was cancelled by an explicit leave) is no longer claimable
-   * either — even though room code + playerId are visible to room members.
+   * The token is the sole rejoin credential. `playerId` is deliberately not
+   * accepted as a fallback: room members can see it, so it cannot authorize a
+   * disconnected seat. A normal page reload retains the current token and
+   * reconnects during the armed grace window.
    */
   rejoin(
     socketId: string,
     rawCode: string,
     rawToken: string,
-    rawPlayerId?: string,
   ): { room: Room; player: RoomPlayer; token: string } {
     const code = String(rawCode ?? '').trim().toUpperCase();
     const token = String(rawToken ?? '');
     const seatKey = this.tokenIndex.get(token);
     const entry = seatKey ? this.sessions.get(seatKey) : undefined;
-    const playerId = entry ? entry.playerId : String(rawPlayerId ?? '');
+    if (!entry) {
+      throw new GameRuleError('REJOIN_INVALID', 'Invalid rejoin session.');
+    }
+    const playerId = entry.playerId;
 
     if (entry) {
       // An un-armed token (player has not disconnected yet — e.g. a page
@@ -276,39 +274,6 @@ export class GameService {
       if (entry.code !== code) {
         this.cancelSession(entry.code, entry.playerId);
         throw new GameRuleError('REJOIN_INVALID', 'Rejoin token does not match this room.');
-      }
-    } else {
-      // Stale-token fallback: reclaim the named seat only while it is still
-      // disconnected (inside its grace window).
-      const fallbackRoom = this.rooms.get(code);
-      // A legitimate rejoiner always arrives on a FRESH socket that holds no
-      // seat; an in-room opponent's socket always holds its own seat. So any
-      // socket that already occupies a seat in this room is never a
-      // legitimate rejoiner and is rejected outright. (Do NOT gate on
-      // "last holding socket" identity — legitimate rejoins use new sockets,
-      // and that check would break the fallback.)
-      if (fallbackRoom?.players.some((candidate) => candidate.socketId === socketId)) {
-        throw new GameRuleError('REJOIN_INVALID', 'Invalid rejoin session.');
-      }
-      // Residual limitation (acceptable for MVP LAN): code + every seat's
-      // playerId are visible to room members, so a FRESH-TAB socket holding
-      // no seat can claim a live-grace seat directly via code + playerId —
-      // no abandonment of its own seat is required — including a mid-match
-      // takeover of a disconnected seat within the grace window (an in-room
-      // opponent would need to first abandon their own seat to reach this
-      // path, but a brand-new tab of theirs never holds a seat).
-      const seat = fallbackRoom?.players.find((candidate) => candidate.playerId === playerId);
-      if (!seat || seat.connected) {
-        throw new GameRuleError('REJOIN_INVALID', 'Invalid rejoin session.');
-      }
-      // The seat must be inside a LIVE grace window. An in-game session entry
-      // is deliberately retained past expiry so an original-token late rejoin
-      // can report REJOIN_EXPIRED — that retained-but-expired (or cancelled/
-      // un-armed) entry must never make the seat claimable via the public
-      // code + playerId fallback.
-      const grace = this.sessions.get(this.seatKey(code, playerId));
-      if (!grace || grace.expiresAt === null || this.now() > grace.expiresAt) {
-        throw new GameRuleError('REJOIN_INVALID', 'Invalid rejoin session.');
       }
     }
 
