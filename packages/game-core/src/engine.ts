@@ -76,8 +76,17 @@ function buildDeck(state: GameState): HandCard[] {
 }
 
 function drawOne(state: GameState, player: PlayerState): void {
-  let card = player.deck.shift();
-  if (!card) card = { uid: uid(state, 'card'), cardId: 'bucket' };
+  if (state.status === 'finished') return;
+  const card = player.deck.shift();
+  if (!card) {
+    // GA-3a: finite deck — an exhausted deck deals escalating fatigue damage
+    // (1, 2, 3, …) instead of drawing the old infinite 'bucket' filler.
+    player.fatigue += 1;
+    player.hp -= player.fatigue;
+    addLog(state, `${player.name} has no cards left and suffers ${player.fatigue} fatigue damage.`);
+    maybeFinish(state, player.id);
+    return;
+  }
   if (player.hand.length >= state.config.handCap) {
     player.discard.push(card);
     addLog(state, `${player.name} burns a draw because their hand is full.`);
@@ -125,6 +134,22 @@ function startTurn(state: GameState, playerId: PlayerId): void {
   }
 
   drawOne(state, player);
+  // GA-3c "War Drums": from escalationTurn onward, at the start of each of
+  // this player's turns every SURVIVING unit (already dot-ticked above) gains
+  // +1 ATK permanently. Skipped if the fatigue draw above ended the match.
+  if (state.status === 'playing' && player.turnsStarted >= state.config.escalationTurn) {
+    let boosted = 0;
+    for (const lane of state.lanes) {
+      const unit = lane.sides[playerId].unit;
+      if (unit) {
+        unit.attack += 1;
+        boosted += 1;
+      }
+    }
+    if (boosted > 0) {
+      addLog(state, `War Drums: ${player.name}'s ${boosted} unit(s) each gain +1 ATK.`);
+    }
+  }
   addLog(state, `${player.name} starts turn ${state.turnNumber} with ${player.mana} mana.`);
 }
 
@@ -343,6 +368,59 @@ function applyEffects(
         removeDeadUnit(state, target.lane, target.ownerId);
         break;
       }
+      case 'stun': {
+        const resolvedTarget =
+          targetKind === 'self' ? 'self' : targetKind === 'enemy-unit' ? 'enemy-unit' : 'friendly-unit';
+        if (targetKind !== 'self' && targetKind !== 'enemy-unit' && targetKind !== 'friendly-unit') {
+          fail('INVALID_EFFECT_TARGET', 'Stun requires a unit target.');
+        }
+        const target = targetUnit(state, actorId, resolvedTarget, sourceLaneIndex, targetLaneIndex);
+        // One stun slot per unit: assigning here replaces any existing stun.
+        target.unit.stun = { turns: effect.turns };
+        addLog(state, `${getCard(target.unit.cardId).name} is stunned for ${effect.turns} turn(s) in lane ${target.lane.index + 1}.`);
+        break;
+      }
+      case 'bounce-unit': {
+        const resolvedTarget =
+          targetKind === 'self' ? 'self' : targetKind === 'enemy-unit' ? 'enemy-unit' : 'friendly-unit';
+        if (targetKind !== 'self' && targetKind !== 'enemy-unit' && targetKind !== 'friendly-unit') {
+          fail('INVALID_EFFECT_TARGET', 'Bounce requires a unit target.');
+        }
+        const target = targetUnit(state, actorId, resolvedTarget, sourceLaneIndex, targetLaneIndex);
+        const owner = state.players[target.ownerId];
+        const card = getCard(target.unit.cardId);
+        target.lane.sides[target.ownerId].unit = null;
+        // Fresh hand card: new uid, same cardId — any buffs/dots/stuns are lost.
+        const returned: HandCard = { uid: uid(state, 'card'), cardId: target.unit.cardId };
+        if (owner.hand.length >= state.config.handCap) {
+          owner.discard.push(returned);
+          addLog(state, `${card.name} is bounced, but ${owner.name}'s hand is full — it is discarded (buffs lost).`);
+        } else {
+          owner.hand.push(returned);
+          addLog(state, `${card.name} is returned to ${owner.name}'s hand (buffs lost).`);
+        }
+        break;
+      }
+      case 'discard-random': {
+        if (targetKind !== 'none') fail('INVALID_EFFECT_TARGET', 'Discard random requires no target.');
+        const victim = state.players[enemyId];
+        for (let i = 0; i < effect.amount; i += 1) {
+          if (victim.hand.length === 0) {
+            addLog(state, `${victim.name} has no cards left to discard.`);
+            break;
+          }
+          // Seeded random pick: shuffle the hand, discard the first card, and
+          // consume the seed so successive picks are deterministic and distinct.
+          const shuffled = shuffle(victim.hand, state.seed);
+          state.seed = shuffled.seed;
+          const discarded = shuffled.values[0];
+          const index = victim.hand.findIndex((c) => c.uid === discarded.uid);
+          victim.hand.splice(index, 1);
+          victim.discard.push(discarded);
+          addLog(state, `${victim.name} discards ${getCard(discarded.cardId).name} at random.`);
+        }
+        break;
+      }
       default: {
         const exhaustive: never = effect;
         throw new Error(`Unhandled effect ${(exhaustive as Effect).type}`);
@@ -362,6 +440,17 @@ function playUnit(
   if (card.faction !== 'universal' && card.faction !== lane.type) {
     fail('WRONG_LANE_TYPE', `${card.name} must be played on ${/^[aeiou]/i.test(card.faction) ? 'an' : 'a'} ${card.faction} lane.`);
   }
+  // GA-4a onPlay: validate the lane-relative target BEFORE placement so a
+  // failing target is an atomic play failure (no mana spent, no unit placed).
+  // 'self'/'friendly-unit' always resolve to the unit being placed (the lane's
+  // friendly slot was just validated as empty), 'enemy-hero'/'none' need no
+  // lane occupant — only 'enemy-unit' requires an occupant right now.
+  if (card.onPlay) {
+    validateEffects(card.onPlay.effects);
+    if (card.onPlay.target === 'enemy-unit' && !lane.sides[otherPlayerId(state, playerId)].unit) {
+      fail('INVALID_TARGET', `${card.name} must be played into a lane occupied by an enemy unit.`);
+    }
+  }
   lane.sides[playerId].unit = {
     uid: uid(state, 'unit'),
     cardId: card.id,
@@ -372,6 +461,10 @@ function playUnit(
     turnsSurvived: 0,
     specialUsesRemaining: card.special?.uses ?? 0,
   };
+  if (card.onPlay) {
+    applyEffects(state, playerId, card.onPlay.effects, card.onPlay.target, lane.index, lane.index);
+    addLog(state, `${card.name} triggers its on-play effect.`);
+  }
 }
 
 function playBuilding(
@@ -489,19 +582,61 @@ function attackBonus(state: GameState, lane: LaneState, playerId: PlayerId): num
   return card.passive.amount;
 }
 
+/**
+ * GA-4b — the total attack a unit would deal in `lane` for `playerId`: base
+ * attack + own-lane building bonus + swarm bonus (swarm × number of OTHER
+ * friendly units on the board, any lane). Exported so the UI can display
+ * effective ATK instead of raw stats. Returns 0 when the side has no unit.
+ */
+export function effectiveAttack(state: GameState, lane: LaneState, playerId: PlayerId): number {
+  const unit = lane.sides[playerId].unit;
+  if (!unit) return 0;
+  let total = unit.attack + attackBonus(state, lane, playerId);
+  const card = getCard(unit.cardId);
+  if (card.kind === 'unit' && card.swarm) {
+    const otherFriendlies = state.lanes.filter((l) => l !== lane && l.sides[playerId].unit).length;
+    total += card.swarm * otherFriendlies;
+  }
+  return Math.max(0, total);
+}
+
 function resolveCombat(state: GameState, attackerId: PlayerId): void {
   const defenderId = otherPlayerId(state, attackerId);
   for (const lane of state.lanes) {
     if (state.status === 'finished') break;
     const attacker = lane.sides[attackerId].unit;
     if (!attacker || attacker.health <= 0) continue;
-    const damage = Math.max(0, attacker.attack + attackBonus(state, lane, attackerId));
+    // GA-1a stagger: a freshly-played unit (0 turns survived) arrives in the
+    // lane but does not attack until its owner's NEXT turn. It still blocks
+    // damage as a defender on this turn.
+    if (attacker.turnsSurvived === 0) {
+      addLog(state, `${getCard(attacker.cardId).name} arrives in lane ${lane.index + 1} and will attack from next turn.`);
+      continue;
+    }
+    // GA-2a stun: a stunned READY unit skips the attack it would make and the
+    // slot ticks down. A staggered unit (handled above) keeps its slot because
+    // it had no attack to skip.
+    if (attacker.stun) {
+      addLog(state, `${getCard(attacker.cardId).name} is stunned and skips its attack in lane ${lane.index + 1}.`);
+      if (attacker.stun.turns <= 1) attacker.stun = undefined;
+      else attacker.stun.turns -= 1;
+      continue;
+    }
+    const damage = effectiveAttack(state, lane, attackerId);
     state.stats[attackerId].damageDealt += damage;
     const defender = lane.sides[defenderId].unit;
     if (defender) {
       defender.health -= damage;
       addLog(state, `${getCard(attacker.cardId).name} deals ${damage} to ${getCard(defender.cardId).name}.`);
+      const killed = defender.health <= 0;
       removeDeadUnit(state, lane, defenderId);
+      // GA-3b trades pay: a combat kill of an enemy UNIT (never a hero, never
+      // effect damage) draws for the killer.
+      const attackerCard = getCard(attacker.cardId);
+      if (killed && attackerCard.kind === 'unit' && attackerCard.drawOnKill) {
+        for (let i = 0; i < attackerCard.drawOnKill; i += 1) drawOne(state, state.players[attackerId]);
+        addLog(state, `${attackerCard.name} draws ${attackerCard.drawOnKill} card(s) from the kill.`);
+      }
     } else {
       state.players[defenderId].hp -= damage;
       addLog(state, `${getCard(attacker.cardId).name} deals ${damage} direct damage.`);
@@ -589,6 +724,7 @@ export function createGame(options: CreateGameOptions): GameState {
       hand: [],
       discard: [],
       connected: true,
+      fatigue: 0,
     };
     state.stats[player.id] = { turnsTaken: 0, cardsPlayed: 0, unitsDestroyed: 0, damageDealt: 0 };
   }
@@ -606,6 +742,12 @@ export function createGame(options: CreateGameOptions): GameState {
     const player = players[playerId];
     player.deck = buildDeck(state);
     for (let i = 0; i < config.startingHand; i += 1) drawOne(state, player);
+    // GA-5a initiative compensation: the player who does NOT start the match
+    // draws one extra card.
+    if (playerId !== state.activePlayerId) {
+      drawOne(state, player);
+      addLog(state, `${player.name} draws an extra starting card (second-player compensation).`);
+    }
   }
 
   startTurn(state, firstActive);
@@ -674,6 +816,7 @@ export function toClientView(
       deckCount: player.deck.length,
       discardCount: player.discard.length,
       connected: player.connected,
+      fatigue: player.fatigue,
     };
   }
 

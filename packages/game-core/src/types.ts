@@ -15,6 +15,12 @@ export interface GameConfig {
   startingHand: number;
   handCap: number;
   laneTypes: readonly LaneType[];
+  /**
+   * GA-3c ("War Drums") — from this turn number (per player, 1-based) onward,
+   * at the start of each player's turn every surviving unit of that player
+   * gains +1 ATK permanently. Guarantees every match resolves.
+   */
+  escalationTurn: number;
 }
 
 /**
@@ -30,6 +36,7 @@ export const DEFAULT_GAME_CONFIG: GameConfig = {
   startingHand: 4,
   handCap: 10,
   laneTypes: DEFAULT_LANE_TYPES,
+  escalationTurn: 15,
 };
 
 export type Effect =
@@ -45,7 +52,43 @@ export type Effect =
   | { type: 'heal-hero'; amount: number }
   | { type: 'draw'; amount: number }
   | { type: 'destroy-building' }
-  | { type: 'destroy-unit' };
+  | { type: 'destroy-unit' }
+  /**
+   * GA-2a — stun. The target unit skips the attack it WOULD make (it must be
+   * ready, i.e. `turnsSurvived >= 1`; a staggered unit keeps its slot). A
+   * single stun slot per unit: applying a new stun REPLACES the old one.
+   */
+  | { type: 'stun'; turns: number }
+  /**
+   * GA-2b — bounce-unit. The target unit is removed from the lane and a FRESH
+   * hand card (new uid, same cardId) is returned to its owner — any buffs or
+   * dots/stuns are lost. If the owner's hand is full the card is discarded.
+   */
+  | { type: 'bounce-unit' }
+  /**
+   * GA-2c — discard-random. The OPPONENT discards `amount` cards chosen at
+   * random (seeded, deterministic) from their hand. Requires `targetKind`
+   * 'none'. If the hand has fewer cards, the whole hand is discarded.
+   */
+  | { type: 'discard-random'; amount: number };
+
+/**
+ * GA-4a — on-play effect targeting. The target is always LANE-RELATIVE (no
+ * separate targeting UI): 'enemy-unit' means the enemy unit in the lane the
+ * unit is played into, 'enemy-hero' the enemy hero, 'self'/'friendly-unit'
+ * the placed unit itself (the only friendly unit in that lane afterwards).
+ */
+export type OnPlayTarget = 'none' | 'self' | 'enemy-unit' | 'enemy-hero' | 'friendly-unit';
+
+/**
+ * GA-4a — an effect applied immediately after the unit is placed. Target
+ * validation happens BEFORE placement: if the required target is missing the
+ * whole play fails atomically (no mana spent, no unit placed).
+ */
+export interface OnPlayDefinition {
+  target: OnPlayTarget;
+  effects: readonly Effect[];
+}
 
 export interface SpecialDefinition {
   name: string;
@@ -73,6 +116,12 @@ export interface UnitCardDefinition {
   attack: number;
   health: number;
   special?: SpecialDefinition;
+  /** GA-4a — effect applied immediately after placement (lane-relative target). */
+  onPlay?: OnPlayDefinition;
+  /** GA-4b — swarm: +N ATK per OTHER friendly unit on the board (any lane). */
+  swarm?: number;
+  /** GA-3b — draws N cards when this unit destroys an enemy UNIT in combat. */
+  drawOnKill?: number;
 }
 
 export interface BuildingCardDefinition {
@@ -120,6 +169,13 @@ export interface UnitInstance {
    * REPLACES this slot — dots never stack.
    */
   dot?: { amount: number; turns: number };
+  /**
+   * GA-2a — single stun slot. The unit skips its attack on the owner's next
+   * READY turn and the slot ticks down; a staggered unit (turnsSurvived 0)
+   * keeps its slot because it had no attack to skip. Applying a new stun
+   * REPLACES this slot — stuns never stack.
+   */
+  stun?: { turns: number };
 }
 
 export interface BuildingInstance {
@@ -150,6 +206,12 @@ export interface PlayerState {
   hand: HandCard[];
   discard: HandCard[];
   connected: boolean;
+  /**
+   * GA-3a — finite-deck fatigue. Incremented by 1 every time this player
+   * would draw from an empty deck; the damage equals the counter (1, 2, 3, …)
+   * and accumulates. Replaces the old infinite 'bucket' filler card.
+   */
+  fatigue: number;
 }
 
 export interface GameLogEntry {
@@ -243,6 +305,8 @@ export interface ClientPlayerView {
   deckCount: number;
   discardCount: number;
   connected: boolean;
+  /** GA-3a — current fatigue damage level (see PlayerState.fatigue). */
+  fatigue: number;
 }
 
 export interface ClientGameView {

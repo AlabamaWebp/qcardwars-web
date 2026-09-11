@@ -12,6 +12,8 @@ import {
   LaneType,
   CardDefinition,
   Effect,
+  LaneState,
+  effectiveAttack,
 } from './index';
 
 function game(seed = 2) {
@@ -61,7 +63,7 @@ describe('game-core baseline', () => {
     expect(state.players.p1.hand.some((c) => c.uid === provided.uid)).toBe(true);
   });
 
-  it('plays a unit, spends mana, then attacks an open lane on end turn', () => {
+  it('plays a unit, spends mana, staggers one turn, then attacks an open lane on end turn', () => {
     let state = game();
     state.activePlayerId = 'p1';
     state.players.p1.mana = 10;
@@ -76,6 +78,19 @@ describe('game-core baseline', () => {
     });
     expect(state.players.p1.mana).toBe(8);
     const hpBefore = state.players.p2.hp;
+    // GA-1a stagger: a freshly-played unit arrives but does not attack yet.
+    state = applyAction(state, {
+      type: 'end-turn',
+      playerId: 'p1',
+      expectedRevision: state.revision,
+    });
+    expect(state.players.p2.hp).toBe(hpBefore);
+    expect(state.log.some((e) => /arrives in lane 2/.test(e.text))).toBe(true);
+    state = applyAction(state, {
+      type: 'end-turn',
+      playerId: 'p2',
+      expectedRevision: state.revision,
+    });
     state = applyAction(state, {
       type: 'end-turn',
       playerId: 'p1',
@@ -367,8 +382,11 @@ describe('building passives', () => {
     expect(state.lanes[1].sides.p1.unit?.attack).toBe(2);
 
     const hpBefore = state.players.p2.hp;
+    state = endTurn(state, 'p1'); // GA-1a: metrocop staggers in — no attack yet
+    expect(state.players.p2.hp).toBe(hpBefore);
+    state = endTurn(state, 'p2');
     state = endTurn(state, 'p1');
-    expect(state.players.p2.hp).toBe(hpBefore - 3);
+    expect(state.players.p2.hp).toBe(hpBefore - 3); // 2 + 1 building bonus
   });
 
   it('Field Hospital heals a wounded unit at the start of its owner turn (heal passive)', () => {
@@ -646,6 +664,9 @@ describe('new catalog content', () => {
     expect(state.lanes[0].sides.p1.unit?.attack).toBe(2);
 
     const hpBefore = state.players.p2.hp;
+    state = endTurn(state, 'p1'); // GA-1a: runner staggers in — no attack yet
+    expect(state.players.p2.hp).toBe(hpBefore);
+    state = endTurn(state, 'p2');
     state = endTurn(state, 'p1');
     expect(state.players.p2.hp).toBe(hpBefore - 3); // 2 + 1 building bonus
   });
@@ -1508,5 +1529,578 @@ describe('selectable lanes (END-1)', () => {
         }),
       ),
     ).toBe('WRONG_LANE_TYPE');
+  });
+});
+
+// =============================================================================
+// M1 rule changes: GA-1 stagger, GA-2 stun/bounce/discard-random, GA-3
+// fatigue/escalation/drawOnKill, GA-4 onPlay/swarm, GA-5 second-player card.
+// =============================================================================
+
+describe('M1 rule changes', () => {
+  /** Temporarily register a test-only card definition, restored in `finally`. */
+  function withFakeCard(card: CardDefinition, fn: () => void): void {
+    (CARD_CATALOG as CardDefinition[]).push(card);
+    CARD_BY_ID.set(card.id, card);
+    try {
+      fn();
+    } finally {
+      CARD_BY_ID.delete(card.id);
+      const mutable = CARD_CATALOG as CardDefinition[];
+      mutable.splice(mutable.indexOf(card), 1);
+    }
+  }
+
+  function placeUnit(
+    state: ReturnType<typeof game>,
+    laneIndex: number,
+    playerId: 'p1' | 'p2',
+    cardId: string,
+    attack: number,
+    health: number,
+    turnsSurvived: number,
+    extra?: Partial<NonNullable<LaneState['sides']['p1']['unit']>>,
+  ): ReturnType<typeof game> {
+    const next = structuredClone(state);
+    next.lanes[laneIndex].sides[playerId].unit = {
+      uid: `placed-${playerId}-${laneIndex}`,
+      cardId,
+      ownerId: playerId,
+      attack,
+      health,
+      maxHealth: health,
+      turnsSurvived,
+      specialUsesRemaining: 0,
+      ...extra,
+    };
+    return next;
+  }
+
+  describe('GA-1a stagger', () => {
+    it('a staggered unit still blocks as a defender on the turn it is played', () => {
+      let state = game(70);
+      state = setActive(state, 'p1');
+      state = playCard(state, 'p1', 'combine-metrocop', 1); // staggered in (2/3)
+      state = structuredClone(state);
+      state.lanes[1].sides.p2.unit = {
+        uid: 'p2-metrocop',
+        cardId: 'combine-metrocop',
+        ownerId: 'p2',
+        attack: 2,
+        health: 3,
+        maxHealth: 3,
+        turnsSurvived: 1,
+        specialUsesRemaining: 0,
+      };
+      state = endTurn(state, 'p1'); // staggered: no attack
+      state = endTurn(state, 'p2'); // ready metrocop hits p1's staggered unit, not the hero
+      expect(state.lanes[1].sides.p1.unit?.health).toBe(1); // 3 - 2
+      expect(state.players.p1.hp).toBe(30); // blocked by the staggered body
+    });
+  });
+
+  describe('GA-3a finite-deck fatigue', () => {
+    it('exhausted deck deals escalating fatigue instead of drawing the infinite bucket', () => {
+      let state = game(71);
+      state = setActive(state, 'p1');
+      state = structuredClone(state);
+      state.players.p1.deck = [];
+      const hpBefore = state.players.p1.hp;
+      const handBefore = state.players.p1.hand.length;
+
+      state = playCard(state, 'p1', 'power-resupply', 0); // draws 2 from an empty deck
+
+      expect(state.players.p1.fatigue).toBe(2);
+      expect(state.players.p1.hp).toBe(hpBefore - 3); // 1 + 2
+      expect(state.players.p1.hand).toHaveLength(handBefore); // nothing drawn
+      expect(state.players.p1.hand.some((c) => c.cardId === 'bucket')).toBe(false);
+      expect(state.log.filter((e) => /no cards left/.test(e.text))).toHaveLength(2);
+    });
+
+    it('fatigue can end the match at 0 HP (winner is the opponent)', () => {
+      let state = game(72);
+      state = setActive(state, 'p1');
+      state = structuredClone(state);
+      state.players.p1.deck = [];
+      state.players.p1.hp = 1;
+
+      state = playCard(state, 'p1', 'power-resupply', 0);
+
+      expect(state.status).toBe('finished');
+      expect(state.winnerId).toBe('p2');
+      expect(state.players.p1.hp).toBe(0);
+    });
+  });
+
+  describe('GA-5a second-player card', () => {
+    it('the non-first player draws one extra starting card (equal hands at start)', () => {
+      const p1First = game(2); // even seed → p1 goes first
+      expect(p1First.players.p1.hand.length).toBe(5); // 4 + turn-start draw
+      expect(p1First.players.p2.hand.length).toBe(5); // 4 + compensation
+      expect(p1First.log.some((e) => /Bob draws an extra starting card/.test(e.text))).toBe(true);
+
+      const p2First = game(3); // odd seed → p2 goes first
+      expect(p2First.players.p1.hand.length).toBe(5); // 4 + compensation
+      expect(p2First.players.p2.hand.length).toBe(5); // 4 + turn-start draw
+      expect(p2First.log.some((e) => /Alice draws an extra starting card/.test(e.text))).toBe(true);
+    });
+  });
+
+  describe('GA-3c War Drums escalation', () => {
+    it('surviving units gain +1 ATK permanently from escalationTurn onward', () => {
+      let state = createGame({
+        roomCode: 'ESC1',
+        players: [
+          { id: 'p1', name: 'Alice' },
+          { id: 'p2', name: 'Bob' },
+        ],
+        seed: 2,
+        config: { escalationTurn: 2 },
+      });
+      state = setActive(state, 'p1');
+      state = playCard(state, 'p1', 'combine-metrocop', 1);
+      state = endTurn(state, 'p1'); // staggered: no attack
+      state = endTurn(state, 'p2'); // p2 turn 1 (1 < 2: no escalation); p1 turn 2 starts
+
+      expect(state.lanes[1].sides.p1.unit?.attack).toBe(3); // 2 + 1 permanent
+      expect(state.log.some((e) => /War Drums/.test(e.text))).toBe(true);
+
+      const hpBefore = state.players.p2.hp;
+      state = endTurn(state, 'p1');
+      expect(state.players.p2.hp).toBe(hpBefore - 3);
+
+      state = endTurn(state, 'p2'); // p1 turn 3: escalation again
+      expect(state.lanes[1].sides.p1.unit?.attack).toBe(4);
+    });
+
+    it('default config escalates at turn 15 and tracks fatigue in the client view', () => {
+      const state = game(2);
+      expect(state.config.escalationTurn).toBe(15);
+      expect(state.players.p1.fatigue).toBe(0);
+      expect(state.players.p2.fatigue).toBe(0);
+      const view = toClientView(state, 'p1');
+      expect(view.players.p1.fatigue).toBe(0);
+      expect(view.players.p2.fatigue).toBe(0);
+    });
+  });
+
+  describe('GA-2a stun', () => {
+    it('a stunned ready unit skips its attack each turn and the slot ticks down', () => {
+      withFakeCard(
+        {
+          id: 'test-stun',
+          name: 'Test Stun',
+          kind: 'power',
+          faction: 'universal',
+          tier: 1,
+          cost: 2,
+          description: 'test',
+          target: 'enemy-unit',
+          effects: [{ type: 'stun', turns: 2 }],
+        },
+        () => {
+          let state = game(73);
+          state = setActive(state, 'p1');
+          state = placeUnit(state, 1, 'p2', 'combine-metrocop', 2, 3, 1);
+          state = playCard(state, 'p1', 'test-stun', 1, 1);
+          expect(state.lanes[1].sides.p2.unit?.stun).toEqual({ turns: 2 });
+
+          const hpBefore = state.players.p1.hp;
+          state = endTurn(state, 'p1');
+          state = endTurn(state, 'p2'); // stunned: skip, 2 → 1
+          expect(state.players.p1.hp).toBe(hpBefore);
+          expect(state.lanes[1].sides.p2.unit?.stun).toEqual({ turns: 1 });
+          expect(state.log.some((e) => /stunned and skips/.test(e.text))).toBe(true);
+
+          state = endTurn(state, 'p1');
+          state = endTurn(state, 'p2'); // stunned: skip, cleared
+          expect(state.players.p1.hp).toBe(hpBefore);
+          expect(state.lanes[1].sides.p2.unit?.stun).toBeUndefined();
+
+          state = endTurn(state, 'p1');
+          state = endTurn(state, 'p2'); // ready again: attacks for 2
+          expect(state.players.p1.hp).toBe(hpBefore - 2);
+        },
+      );
+    });
+
+    it('a staggered stunned unit keeps its slot (no attack to skip)', () => {
+      let state = game(74);
+      state = setActive(state, 'p1');
+      state = placeUnit(state, 0, 'p1', 'combine-metrocop', 2, 3, 0, { stun: { turns: 1 } });
+      const hpBefore = state.players.p2.hp;
+
+      state = endTurn(state, 'p1'); // staggered: no attack, stun preserved
+      expect(state.lanes[0].sides.p1.unit?.stun).toEqual({ turns: 1 });
+      expect(state.players.p2.hp).toBe(hpBefore);
+
+      state = endTurn(state, 'p2'); // p1's unit becomes ready
+      state = endTurn(state, 'p1'); // ready but stunned: skip, slot cleared
+      expect(state.players.p2.hp).toBe(hpBefore);
+      expect(state.lanes[0].sides.p1.unit?.stun).toBeUndefined();
+
+      state = endTurn(state, 'p2');
+      state = endTurn(state, 'p1'); // ready and unstunned: attacks for 2
+      expect(state.players.p2.hp).toBe(hpBefore - 2);
+    });
+
+    it('applying a new stun replaces the slot instead of stacking', () => {
+      withFakeCard(
+        {
+          id: 'test-stun',
+          name: 'Test Stun',
+          kind: 'power',
+          faction: 'universal',
+          tier: 1,
+          cost: 2,
+          description: 'test',
+          target: 'enemy-unit',
+          effects: [{ type: 'stun', turns: 1 }],
+        },
+        () => {
+          let state = game(75);
+          state = setActive(state, 'p1');
+          state = placeUnit(state, 1, 'p2', 'combine-metrocop', 2, 3, 1, { stun: { turns: 3 } });
+          state = playCard(state, 'p1', 'test-stun', 1, 1);
+          expect(state.lanes[1].sides.p2.unit?.stun).toEqual({ turns: 1 });
+        },
+      );
+    });
+  });
+
+  describe('GA-2b bounce-unit', () => {
+    it('returns a fresh card to the owner hand (buffs lost) and discards when the hand is full', () => {
+      withFakeCard(
+        {
+          id: 'test-bounce',
+          name: 'Test Bounce',
+          kind: 'power',
+          faction: 'universal',
+          tier: 1,
+          cost: 2,
+          description: 'test',
+          target: 'enemy-unit',
+          effects: [{ type: 'bounce-unit' }],
+        },
+        () => {
+          let state = game(76);
+          state = setActive(state, 'p1');
+          state = placeUnit(state, 1, 'p2', 'combine-metrocop', 9, 3, 2); // buffed to 9
+          const handBefore = state.players.p2.hand.length;
+          state = playCard(state, 'p1', 'test-bounce', 1, 1);
+          expect(state.lanes[1].sides.p2.unit).toBeNull();
+          expect(state.players.p2.hand).toHaveLength(handBefore + 1);
+          const fresh = state.players.p2.hand[state.players.p2.hand.length - 1];
+          expect(fresh.cardId).toBe('combine-metrocop');
+          expect(fresh.uid).not.toBe('placed-p2-1'); // fresh instance — buffs lost
+
+          // Full hand → the bounced card is discarded instead.
+          let full = game(77);
+          full = setActive(full, 'p1');
+          full = placeUnit(full, 1, 'p2', 'combine-metrocop', 2, 3, 2);
+          while (full.players.p2.hand.length < 10) {
+            full.players.p2.hand.push({ uid: `pad-${full.players.p2.hand.length}`, cardId: 'bucket' });
+          }
+          const discardBefore = full.players.p2.discard.length;
+          full = playCard(full, 'p1', 'test-bounce', 1, 1);
+          expect(full.lanes[1].sides.p2.unit).toBeNull();
+          expect(full.players.p2.hand).toHaveLength(10);
+          expect(full.players.p2.discard).toHaveLength(discardBefore + 1);
+        },
+      );
+    });
+  });
+
+  describe('GA-2c discard-random', () => {
+    it('discards seeded random cards from the opponent hand (deterministic, capped, no target)', () => {
+      withFakeCard(
+        {
+          id: 'test-discard',
+          name: 'Test Discard',
+          kind: 'power',
+          faction: 'universal',
+          tier: 1,
+          cost: 2,
+          description: 'test',
+          target: 'none',
+          effects: [{ type: 'discard-random', amount: 2 }],
+        },
+        () => {
+          const run = () => {
+            let state = game(78);
+            state = setActive(state, 'p1');
+            state = structuredClone(state);
+            state.players.p2.hand = [
+              { uid: 'h1', cardId: 'combine-metrocop' },
+              { uid: 'h2', cardId: 'rebel-scout' },
+              { uid: 'h3', cardId: 'antlion-runner' },
+              { uid: 'h4', cardId: 'zombie-bloater' },
+            ];
+            return playCard(state, 'p1', 'test-discard');
+          };
+          const a = run();
+          const b = run();
+          expect(a.players.p2.hand).toHaveLength(2);
+          expect(a.players.p2.discard).toHaveLength(2);
+          expect(a.players.p2.discard.map((c) => c.cardId)).toEqual(b.players.p2.discard.map((c) => c.cardId));
+          const all = [...a.players.p2.hand, ...a.players.p2.discard].map((c) => c.cardId).sort();
+          expect(all).toEqual(['antlion-runner', 'combine-metrocop', 'rebel-scout', 'zombie-bloater'].sort());
+          expect(a.players.p2.discard[0].cardId).not.toBe(a.players.p2.discard[1].cardId); // distinct picks
+
+          // Capped by hand size.
+          let capped = game(79);
+          capped = setActive(capped, 'p1');
+          capped = structuredClone(capped);
+          capped.players.p2.hand = [{ uid: 'only', cardId: 'rebel-scout' }];
+          capped = playCard(capped, 'p1', 'test-discard');
+          expect(capped.players.p2.hand).toHaveLength(0);
+          expect(capped.players.p2.discard).toHaveLength(1);
+          expect(capped.log.some((e) => /no cards left to discard/.test(e.text))).toBe(true);
+
+          // Requires a 'none' target.
+          withFakeCard(
+            {
+              id: 'test-discard-bad',
+              name: 'Bad Discard',
+              kind: 'power',
+              faction: 'universal',
+              tier: 1,
+              cost: 2,
+              description: 'test',
+              target: 'enemy-unit',
+              effects: [{ type: 'discard-random', amount: 1 }],
+            },
+            () => {
+              let bad = game(80);
+              bad = setActive(bad, 'p1');
+              bad = placeUnit(bad, 1, 'p2', 'combine-metrocop', 2, 3, 1);
+              const provided = giveCard(bad, 'p1', 'test-discard-bad');
+              expect(
+                ruleCode(() =>
+                  applyAction(provided.state, {
+                    type: 'play-card',
+                    playerId: 'p1',
+                    expectedRevision: provided.state.revision,
+                    handCardUid: provided.uid,
+                    laneIndex: 1,
+                    targetLaneIndex: 1,
+                  }),
+                ),
+              ).toBe('INVALID_EFFECT_TARGET');
+            },
+          );
+        },
+      );
+    });
+  });
+
+  describe('GA-4a onPlay', () => {
+    it('enemy-unit onPlay fires on placement and fails atomically into an empty lane', () => {
+      withFakeCard(
+        {
+          id: 'test-harrier',
+          name: 'Test Harrier',
+          kind: 'unit',
+          faction: 'universal',
+          tier: 1,
+          cost: 1,
+          description: 'test',
+          attack: 2,
+          health: 2,
+          onPlay: { target: 'enemy-unit', effects: [{ type: 'damage-unit', amount: 1 }] },
+        },
+        () => {
+          let state = game(81);
+          state = setActive(state, 'p1');
+          state = placeUnit(state, 1, 'p2', 'combine-metrocop', 2, 3, 1);
+          state = playCard(state, 'p1', 'test-harrier', 1);
+          expect(state.lanes[1].sides.p1.unit?.cardId).toBe('test-harrier');
+          expect(state.lanes[1].sides.p2.unit?.health).toBe(2); // 3 - 1 on-play damage
+          expect(state.log.some((e) => /on-play effect/.test(e.text))).toBe(true);
+
+          // Atomic failure: no enemy unit in lane 0 → no unit placed, no mana spent,
+          // card stays in hand (applyAction is pure, so the pre-attempt state is untouched).
+          let blocked = game(82);
+          blocked = setActive(blocked, 'p1');
+          const provided = giveCard(blocked, 'p1', 'test-harrier');
+          expect(
+            ruleCode(() =>
+              applyAction(provided.state, {
+                type: 'play-card',
+                playerId: 'p1',
+                expectedRevision: provided.state.revision,
+                handCardUid: provided.uid,
+                laneIndex: 0,
+              }),
+            ),
+          ).toBe('INVALID_TARGET');
+          expect(provided.state.lanes[0].sides.p1.unit).toBeNull();
+          expect(provided.state.players.p1.mana).toBe(10);
+          expect(provided.state.players.p1.hand.some((c) => c.uid === provided.uid)).toBe(true);
+        },
+      );
+    });
+
+    it('self-buff and none-draw onPlay targets resolve to the placed unit / no occupant', () => {
+      withFakeCard(
+        {
+          id: 'test-vanguard',
+          name: 'Test Vanguard',
+          kind: 'unit',
+          faction: 'universal',
+          tier: 1,
+          cost: 1,
+          description: 'test',
+          attack: 2,
+          health: 2,
+          onPlay: { target: 'self', effects: [{ type: 'buff-unit', attack: 1, health: 0 }] },
+        },
+        () => {
+          let state = game(83);
+          state = setActive(state, 'p1');
+          state = playCard(state, 'p1', 'test-vanguard', 0);
+          expect(state.lanes[0].sides.p1.unit?.attack).toBe(3);
+          expect(state.lanes[0].sides.p1.unit?.health).toBe(2);
+        },
+      );
+      withFakeCard(
+        {
+          id: 'test-herald',
+          name: 'Test Herald',
+          kind: 'unit',
+          faction: 'universal',
+          tier: 1,
+          cost: 1,
+          description: 'test',
+          attack: 1,
+          health: 1,
+          onPlay: { target: 'none', effects: [{ type: 'draw', amount: 1 }] },
+        },
+        () => {
+          let state = game(84);
+          state = setActive(state, 'p1');
+          const handBefore = state.players.p1.hand.length; // before the injected card is added
+          state = playCard(state, 'p1', 'test-herald', 2);
+          // The injected test card is added by giveCard and removed by the play,
+          // so the net change vs. handBefore is just the +1 on-play draw.
+          expect(state.players.p1.hand).toHaveLength(handBefore + 1);
+        },
+      );
+    });
+  });
+
+  describe('GA-4b swarm + GA-3b drawOnKill', () => {
+    it('swarm adds ATK per other friendly unit (effectiveAttack and in combat)', () => {
+      withFakeCard(
+        {
+          id: 'test-swarm',
+          name: 'Test Swarm',
+          kind: 'unit',
+          faction: 'universal',
+          tier: 1,
+          cost: 1,
+          description: 'test',
+          attack: 1,
+          health: 2,
+          swarm: 1,
+        },
+        () => {
+          let state = game(85);
+          state = setActive(state, 'p1');
+          state = playCard(state, 'p1', 'test-swarm', 0);
+          state = playCard(state, 'p1', 'combine-metrocop', 1);
+          expect(effectiveAttack(state, state.lanes[0], 'p1')).toBe(2); // 1 + 1 swarm
+          expect(effectiveAttack(state, state.lanes[1], 'p1')).toBe(2); // metrocop, no swarm
+          expect(effectiveAttack(state, state.lanes[2], 'p1')).toBe(0); // empty side
+
+          const hpBefore = state.players.p2.hp;
+          state = endTurn(state, 'p1'); // staggered: no attack yet
+          expect(state.players.p2.hp).toBe(hpBefore);
+          state = endTurn(state, 'p2');
+          state = endTurn(state, 'p1'); // swarm 2 (1+1) + metrocop 2, both open lanes
+          expect(state.players.p2.hp).toBe(hpBefore - 4);
+          expect(state.stats.p1.damageDealt).toBe(4);
+        },
+      );
+    });
+
+    it('swarm stacks with the own-lane building attack bonus in effectiveAttack', () => {
+      withFakeCard(
+        {
+          id: 'test-swarm',
+          name: 'Test Swarm',
+          kind: 'unit',
+          faction: 'universal',
+          tier: 1,
+          cost: 1,
+          description: 'test',
+          attack: 1,
+          health: 2,
+          swarm: 1,
+        },
+        () => {
+          let state = game(86); // lanes: antlion, combine, rebel, zombie
+          state = setActive(state, 'p1');
+          state = playCard(state, 'p1', 'antlion-runner', 0); // +1 swarm source
+          state = playCard(state, 'p1', 'test-swarm', 1); // combine lane
+          state = playCard(state, 'p1', 'building-ammo-cache', 1); // +1 own lane
+          expect(effectiveAttack(state, state.lanes[1], 'p1')).toBe(3); // 1 + 1 building + 1 swarm
+          expect(effectiveAttack(state, state.lanes[0], 'p1')).toBe(2); // runner base attack, no swarm
+        },
+      );
+    });
+
+    it('drawOnKill draws only for combat kills of enemy units', () => {
+      withFakeCard(
+        {
+          id: 'test-reaver',
+          name: 'Test Reaver',
+          kind: 'unit',
+          faction: 'universal',
+          tier: 1,
+          cost: 2,
+          description: 'test',
+          attack: 5,
+          health: 4,
+          drawOnKill: 2,
+        },
+        () => {
+          let state = game(87);
+          state = setActive(state, 'p1');
+          state = placeUnit(state, 1, 'p2', 'combine-metrocop', 2, 3, 1);
+          state = playCard(state, 'p1', 'test-reaver', 1);
+
+          state = endTurn(state, 'p1'); // staggered: no attack
+          state = endTurn(state, 'p2'); // metrocop 2 → reaver 4→2; reaver becomes ready
+          expect(state.lanes[1].sides.p2.unit).not.toBeNull();
+          const handBeforeKill = state.players.p1.hand.length; // turn-start draw already accounted for
+          state = endTurn(state, 'p1'); // reaver 5 kills metrocop (3-5) → draws exactly 2
+          expect(state.lanes[1].sides.p2.unit).toBeNull();
+          expect(state.players.p1.hand).toHaveLength(handBeforeKill + 2);
+          expect(state.log.some((e) => /draws 2 card\(s\) from the kill/.test(e.text))).toBe(true);
+
+          // Effect kills do NOT draw.
+          let eff = game(88);
+          eff = setActive(eff, 'p1');
+          eff = placeUnit(eff, 1, 'p2', 'combine-metrocop', 2, 3, 1);
+          const handEffBefore = eff.players.p1.hand.length;
+          eff = playCard(eff, 'p1', 'power-execution', 1, 1);
+          expect(eff.lanes[1].sides.p2.unit).toBeNull();
+          // The injected power is added by giveCard and removed by the play (net 0);
+          // an effect kill never triggers drawOnKill, so the hand is unchanged.
+          expect(eff.players.p1.hand).toHaveLength(handEffBefore);
+          expect(eff.log.some((e) => /from the kill/.test(e.text))).toBe(false);
+
+          // Open-lane (hero) damage does NOT draw.
+          let hero = game(89);
+          hero = setActive(hero, 'p1');
+          hero = placeUnit(hero, 0, 'p1', 'test-reaver', 5, 4, 1);
+          const handHeroBefore = hero.players.p1.hand.length;
+          hero = endTurn(hero, 'p1'); // 5 direct, no kill
+          expect(hero.players.p1.hand).toHaveLength(handHeroBefore);
+          expect(hero.players.p2.hp).toBe(25);
+        },
+      );
+    });
   });
 });
