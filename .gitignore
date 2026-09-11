@@ -9,4 +9,6 @@ coverage/
 !.env.example
 .opencode/NIGHT_STATUS.md
 .opencode/browser-check/
+.opencode/logs
 .playwright-mcp/
+.pnpm-store
