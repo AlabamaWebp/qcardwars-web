@@ -413,6 +413,19 @@ async function specSoloAi(browser) {
   if (!laneNames.some((n) => n.startsWith('wraith'))) fail(`expected a wraith lane on the board, saw: ${laneNames.join(', ')}`);
   if (laneNames.some((n) => n.startsWith('antlion'))) fail(`antlion lane should have been swapped out: ${laneNames.join(', ')}`);
 
+  // Every hand card, including disabled ones, has a non-gameplay details
+  // action. Opening it must not select/play the card, and Escape closes it.
+  await waitSel(page, 'qcw-card .inspect');
+  await page.click('qcw-card .inspect');
+  await waitSel(page, 'qcw-game .card-detail[role="dialog"]');
+  const detailText = await textOf(page, 'qcw-game .card-detail');
+  if (!/card details/i.test(detailText) || !(await page.$('qcw-game .detail-description'))) {
+    fail(`card details dialog is incomplete: "${detailText.trim()}"`);
+  }
+  if (await page.$('qcw-card .card.selected')) fail('inspecting a card selected it for play');
+  await page.keyboard.press('Escape');
+  await page.waitForSelector('qcw-game .card-detail', { hidden: true, timeout: 5000 });
+
   // Hand the AI the turn (if it is ours), then observe for AI activity with
   // zero further human input.
   if (await page.$('qcw-game .turn.mine')) {

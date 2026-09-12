@@ -1,4 +1,4 @@
-import { Component, DestroyRef, ElementRef, computed, effect, inject, signal } from '@angular/core';
+import { Component, DestroyRef, ElementRef, HostListener, computed, effect, inject, signal } from '@angular/core';
 import type { CardDefinition, ClientUnitView, Faction } from '@qcw/game-core';
 import { getCard, HandCard, ClientLaneState, PlayerId } from '@qcw/game-core';
 import { cardArtUrl, hideBrokenArt } from './card-art';
@@ -196,6 +196,7 @@ import { SoundService } from './sound.service';
                 [selected]="selectedCard()?.uid === card.uid"
                 [disabled]="!client.isMyTurn() || getDef(card.cardId).cost > self().mana"
                 (picked)="pickCard($event)"
+                (inspect)="openCardDetails($event.cardId)"
               />
             }
           </div>
@@ -222,6 +223,59 @@ import { SoundService } from './sound.service';
             @for (entry of g.log.slice(-6).reverse(); track entry.seq) { <div>{{ entry.text }}</div> }
           </div>
         </section>
+
+        @if (inspectedCard(); as card) {
+          <div class="card-detail-backdrop" (click)="closeCardDetails()">
+            <section
+              class="card-detail"
+              role="dialog"
+              aria-modal="true"
+              [attr.aria-label]="i18n.t('game.cardDetails') + ': ' + card.name"
+              [style.--detail-accent]="laneAccent(card.faction)"
+              (click)="$event.stopPropagation()"
+            >
+              <button class="detail-close" type="button" [attr.aria-label]="i18n.t('game.close')" (click)="closeCardDetails()">×</button>
+              <div class="detail-art-frame">
+                <img [src]="artFor(card.id)" [alt]="card.name" (error)="hideArt($event)" />
+                <span class="detail-cost">{{ card.cost }}</span>
+              </div>
+              <div class="detail-copy">
+                <div class="eyebrow">{{ i18n.t('game.cardDetails') }}</div>
+                <h2>{{ card.name }}</h2>
+                <div class="detail-tags">
+                  <span>{{ card.kind }}</span><span>{{ i18n.faction(card.faction) }}</span><span>tier {{ card.tier }}</span>
+                </div>
+                @if (card.kind === 'unit') {
+                  <div class="detail-stats"><span><b>{{ card.attack }}</b> ATK</span><span><b>{{ card.health }}</b> HP</span></div>
+                }
+                <p class="detail-description">{{ card.description }}</p>
+                @if (card.kind === 'power') {
+                  <div class="detail-rule"><b>{{ i18n.t('game.target') }}:</b> {{ targetLabel(card.target) }}</div>
+                }
+                @if (card.kind === 'building') {
+                  <div class="detail-rule"><b>{{ i18n.t('game.passive') }}:</b> {{ passiveLabel(card.passive.type, card.passive.amount) }}</div>
+                }
+                @if (card.kind === 'unit' && card.onPlay) {
+                  <div class="detail-rule"><b>{{ i18n.t('game.onPlay') }}:</b> {{ targetLabel(card.onPlay.target) }}</div>
+                }
+                @if (card.kind === 'unit' && card.swarm) {
+                  <div class="detail-rule"><b>{{ i18n.t('game.swarm') }}:</b> +{{ card.swarm }} ATK {{ i18n.t('game.perAlly') }}</div>
+                }
+                @if (card.kind === 'unit' && card.drawOnKill) {
+                  <div class="detail-rule"><b>{{ i18n.t('game.onKill') }}:</b> {{ i18n.t('game.drawCards') }} {{ card.drawOnKill }}</div>
+                }
+                @if (card.kind === 'unit' && card.special; as special) {
+                  <div class="detail-special">
+                    <div><span>⚡ {{ i18n.t('game.special') }}</span><strong>{{ special.name }}</strong></div>
+                    <div class="detail-tags"><span>{{ special.cost }} {{ i18n.t('game.manaShort') }}</span><span>{{ special.uses }} {{ i18n.t('game.uses') }}</span><span>{{ targetLabel(special.target) }}</span></div>
+                    <p>{{ special.description }}</p>
+                  </div>
+                }
+                <button class="primary detail-done" type="button" (click)="closeCardDetails()">{{ i18n.t('game.close') }}</button>
+              </div>
+            </section>
+          </div>
+        }
 
         @if (showFullLog()) {
           <div class="modal-backdrop" (click)="showFullLog.set(false)">
@@ -368,6 +422,12 @@ import { SoundService } from './sound.service';
     .full-log{display:grid;gap:4px;max-height:min(60vh,480px);overflow-y:auto;font-size:12px;color:#c1c7d2;margin-top:10px}
     .full-log .seq{color:#687183;margin-right:6px}
     .modal-backdrop{position:fixed;inset:0;background:#000b;display:grid;place-items:center;padding:20px}.modal{background:#151a23;border:1px solid #3b4352;border-radius:18px;padding:28px;max-width:440px;text-align:center}.modal h2{font-size:48px;margin:4px}.modal p{color:#aeb6c5;line-height:1.5}.modal button{background:#d7b76c;border:0;padding:11px 18px;border-radius:9px;font-weight:800}.eyebrow{text-transform:uppercase;letter-spacing:.15em;color:#d7b76c;font-size:10px}
+    .card-detail-backdrop{position:fixed;inset:0;z-index:120;background:#05070be8;display:grid;place-items:center;padding:18px;backdrop-filter:blur(8px)}
+    .card-detail{width:min(760px,96vw);max-height:min(680px,94dvh);display:grid;grid-template-columns:280px minmax(0,1fr);overflow:hidden;position:relative;background:linear-gradient(145deg,#1a2230,#0e131b);border:1px solid var(--detail-accent,#d7b76c);border-radius:20px;box-shadow:0 30px 90px #000d;box-shadow:0 30px 90px #000d,0 0 40px color-mix(in srgb,var(--detail-accent,#d7b76c) 20%,transparent)}
+    .detail-close{position:absolute;right:12px;top:12px;z-index:3;width:34px;height:34px;display:grid;place-items:center;padding:0;border:1px solid #ffffff35;border-radius:50%;background:#090d14d9;color:#fff;font-size:23px;line-height:1}.detail-close:hover{background:#d7b76c;color:#111}
+    .detail-art-frame{position:relative;min-height:390px;background:#0a0d12;overflow:hidden;border-right:1px solid #303a49}.detail-art-frame::after{content:'';position:absolute;inset:0;box-shadow:inset 0 0 45px #0008;pointer-events:none}.detail-art-frame img{width:100%;height:100%;display:block;object-fit:cover}.detail-cost{position:absolute;left:14px;top:14px;width:44px;height:44px;display:grid;place-items:center;border-radius:50%;background:var(--detail-accent,#d7b76c);color:#10141b;font-size:20px;font-weight:950;box-shadow:0 5px 18px #000b,inset 0 1px #fff8}
+    .detail-copy{padding:30px;overflow-y:auto}.detail-copy h2{font-size:clamp(28px,4vw,42px);line-height:1.05;margin:5px 42px 10px 0;letter-spacing:-.035em}.detail-tags{display:flex;flex-wrap:wrap;gap:6px}.detail-tags span{padding:4px 8px;border:1px solid #3a4658;border-radius:999px;color:#aeb8c9;background:#0b1017;font-size:10px;text-transform:capitalize}.detail-stats{display:flex;gap:10px;margin:18px 0 4px}.detail-stats span{min-width:92px;padding:10px 14px;border-radius:10px;background:#0c1118;border:1px solid #303a49;color:#9ca7ba}.detail-stats b{font-size:25px;color:#fff;margin-right:4px}.detail-description{font-size:15px;line-height:1.6;color:#e0e4eb;margin:18px 0}.detail-rule{font-size:12px;line-height:1.5;color:#bdc5d2;padding:8px 0;border-top:1px solid #293241}.detail-rule b{color:var(--detail-accent,#d7b76c)}
+    .detail-special{margin-top:14px;padding:14px;border:1px solid #685d48;border-color:color-mix(in srgb,var(--detail-accent,#d7b76c) 48%,#303a49);border-radius:13px;background:#0b1018}.detail-special>div:first-child{display:grid;gap:3px}.detail-special>div:first-child span{font-size:9px;text-transform:uppercase;letter-spacing:.12em;color:var(--detail-accent,#d7b76c)}.detail-special strong{font-size:17px}.detail-special .detail-tags{margin-top:9px}.detail-special p{margin:10px 0 0;color:#c7ced9;font-size:12px;line-height:1.5}.detail-done{margin-top:18px;width:100%}
     @keyframes qcw-target-pulse{0%,100%{box-shadow:0 0 0 2px #d7b76c22,0 0 18px #d7b76c10}50%{box-shadow:0 0 0 3px #d7b76c55,0 0 28px #d7b76c28}}
     @media(max-width:850px){
       .game-shell{padding:7px;height:100dvh;grid-template-rows:auto auto minmax(190px,1fr) auto minmax(180px,26dvh) minmax(105px,17dvh);gap:6px}
@@ -376,6 +436,7 @@ import { SoundService } from './sound.service';
       .board{overflow-x:auto;overflow-y:hidden;overscroll-behavior:contain;grid-template-columns:repeat(4,178px);min-height:0;scroll-snap-type:x mandatory;scrollbar-width:thin}.lane{scroll-snap-align:start;padding:6px;gap:4px;grid-template-rows:21px minmax(0,1fr) 1px minmax(0,1fr)}.lane-name{min-height:21px;font-size:9px}.lane.blocked{opacity:.55}.lane.targetable::after{right:5px;bottom:5px;width:19px;height:19px}
       .slot{min-height:0}.empty{min-height:38px;font-size:8px}.unit{grid-template-columns:42px minmax(0,1fr);gap:6px;padding:5px}.thumb{width:42px;height:42px}.building{grid-template-columns:34px minmax(0,1fr);padding:4px}.building .thumb{width:34px;height:34px}.chip-body{gap:2px}.chip-body>b{font-size:10px}.chip-body>span,.chip-body>small{font-size:9px}.tip{display:none!important}.badges{top:3px;right:3px;gap:2px}.badges>span{font-size:8px;padding:0 3px}.unit:has(.badges) .chip-body>b{padding-right:25px}.unit:has(.badges :nth-child(2)) .chip-body>b{padding-right:46px}.unit:has(.badges :nth-child(3)) .chip-body>b{padding-right:67px}.unit:has(.badges :nth-child(4)) .chip-body>b{padding-right:88px}
       .hand-zone{border-radius:11px}.hand-head{padding:5px 8px 3px}.hand{padding:2px 7px 6px;gap:7px;scroll-snap-type:x mandatory}.footer-grid{grid-template-columns:1fr;grid-template-rows:auto minmax(0,1fr);gap:5px}.hint,.log{padding:7px 9px;max-height:none}.hint{font-size:10px}.log{font-size:10px}.log-head{position:sticky;top:-7px;background:#111720;padding:3px 0}.modal{padding:20px;max-width:94vw}.modal h2{font-size:38px}
+      .card-detail-backdrop{padding:8px}.card-detail{width:100%;max-height:96dvh;grid-template-columns:1fr;grid-template-rows:220px minmax(0,1fr);border-radius:16px}.detail-art-frame{min-height:0;border-right:0;border-bottom:1px solid #303a49}.detail-art-frame img{object-position:center 24%}.detail-copy{padding:18px}.detail-copy h2{font-size:28px}.detail-description{font-size:14px;margin:14px 0}.detail-stats{margin:13px 0 3px}.detail-stats span{padding:8px 11px}.detail-close{right:9px;top:9px}
     }
     @media(min-width:851px) and (max-height:820px){.game-shell{grid-template-rows:auto auto minmax(230px,1fr) auto 222px 76px}.unit{grid-template-columns:54px minmax(0,1fr)}.thumb{width:54px;height:54px}.building{grid-template-columns:40px minmax(0,1fr)}.building .thumb{width:40px;height:40px}}
     .modal-actions{display:flex;gap:10px;justify-content:center;margin-top:12px}.modal-actions .ghost{background:transparent;color:#aeb6c5;border:1px solid #3e4655;padding:11px 18px;border-radius:9px}.modal .waiting{color:#d7b76c;min-height:1.5em}
@@ -424,6 +485,7 @@ export class GameComponent {
   private readonly el = inject(ElementRef);
   readonly selectedCard = signal<HandCard | null>(null);
   readonly selectedSpecialLane = signal<number | null>(null);
+  readonly inspectedCard = signal<CardDefinition | null>(null);
   readonly rematchRequested = signal(false);
   /** Full match-log modal (footer "Full log" button). Local UI state only. */
   readonly showFullLog = signal(false);
@@ -578,6 +640,40 @@ export class GameComponent {
     return card.kind === 'unit' ? card.special?.name ?? null : null;
   }
   side(lane: ClientLaneState, playerId: PlayerId) { return lane.sides[playerId]; }
+
+  openCardDetails(cardId: string): void {
+    this.inspectedCard.set(getCard(cardId));
+  }
+
+  closeCardDetails(): void {
+    this.inspectedCard.set(null);
+  }
+
+  @HostListener('document:keydown.escape')
+  closeCardDetailsOnEscape(): void {
+    if (this.inspectedCard()) this.closeCardDetails();
+  }
+
+  targetLabel(target: string): string {
+    const labels: Record<string, [string, string]> = {
+      self: ['self', 'на себя'],
+      'friendly-unit': ['friendly unit', 'союзный юнит'],
+      'enemy-unit': ['enemy unit', 'вражеский юнит'],
+      'enemy-hero': ['enemy hero', 'герой соперника'],
+      'enemy-building': ['enemy building', 'вражеское здание'],
+      lane: ['lane', 'линия'],
+      none: ['no target', 'без цели'],
+    };
+    const pair = labels[target] ?? [target, target];
+    return this.i18n.isRu() ? pair[1] : pair[0];
+  }
+
+  passiveLabel(type: string, amount: number): string {
+    if (type === 'heal-own-lane-unit-at-turn-start') {
+      return this.i18n.isRu() ? `лечит юнита на этой линии на ${amount} в начале хода` : `heal this lane's unit by ${amount} at turn start`;
+    }
+    return this.i18n.isRu() ? `+${amount} к атаке юнита на этой линии` : `+${amount} attack to this lane's unit`;
+  }
 
   hasTargetSelection(): boolean {
     return Boolean(this.selectedCard()) || this.selectedSpecialLane() !== null;

@@ -27,8 +27,10 @@ pnpm install
 pnpm dev
 ```
 
-Open `http://localhost:4200` in two browser tabs or two devices on the same LAN. One player creates a room;
-the other joins using its code.
+Open `http://localhost:4200` on this computer. From another device on the same LAN, open
+`http://<this-computer-LAN-IP>:4200` (for example `http://192.168.1.50:4200`). One player creates a room;
+the other joins using its code. `pnpm dev` binds both Angular and Nest to `0.0.0.0`; if another device cannot
+connect, allow private-network access for Node.js in the OS firewall and make sure TCP ports 4200 and 3000 are open.
 
 The Nest server runs on port `3000`. In development the Angular client automatically connects to
 `http://<current-hostname>:3000`, so opening the dev server from another device on the LAN works.
@@ -78,4 +80,3 @@ live per-session ledger — completed acceptance IDs, exact run instructions, an
   socket can never be revived into a solo game.
 - **Draw fallback.** `drawOne` returns a `'bucket'` placeholder when a deck is empty (no fatigue damage).
 - **Hero damage sources.** Only `enemy-hero` powers/damage specials harm heroes; units attack units only.
-

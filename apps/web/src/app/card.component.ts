@@ -1,31 +1,42 @@
-import { Component, computed, input, output, signal } from '@angular/core';
+import { Component, computed, inject, input, output, signal } from '@angular/core';
 import { getCard, HandCard } from '@qcw/game-core';
 import { cardArtUrl } from './card-art';
 import { FACTION_THEME } from './faction-theme';
+import { I18nService } from './i18n.service';
 
 @Component({
   selector: 'qcw-card',
   standalone: true,
   template: `
-    <button class="card" [class.selected]="selected()" [style.--faction-accent]="accent()" [disabled]="disabled()" [attr.aria-pressed]="selected()" [title]="def().description" (click)="picked.emit(card())">
-      <span class="cost">{{ def().cost }}</span>
-      <span class="art-frame">
-        <img class="art" [src]="art()" alt="" loading="lazy" (error)="artFailed.set(true)" [class.hidden]="artFailed()" />
-        <span class="art-name">{{ def().name }}</span>
-      </span>
-      <div class="kind">{{ def().kind }}</div>
-      <small>{{ def().faction }} · tier {{ def().tier }}</small>
-      @if (def().kind === 'unit') {
-        <div class="stats"><span>ATK {{ unitAtk }}</span><span>HP {{ unitHp }}</span></div>
-      }
-      <p>{{ def().description }}</p>
-    </button>
+    <div class="card-wrap" [style.--faction-accent]="accent()">
+      <button class="card" [class.selected]="selected()" [disabled]="disabled()" [attr.aria-pressed]="selected()" [title]="def().description" (click)="picked.emit(card())">
+        <span class="cost">{{ def().cost }}</span>
+        <span class="art-frame">
+          <img class="art" [src]="art()" alt="" loading="lazy" (error)="artFailed.set(true)" [class.hidden]="artFailed()" />
+          <span class="art-name">{{ def().name }}</span>
+        </span>
+        <div class="kind">{{ def().kind }}</div>
+        <small>{{ def().faction }} · tier {{ def().tier }}</small>
+        @if (def().kind === 'unit') {
+          <div class="stats"><span>ATK {{ unitAtk }}</span><span>HP {{ unitHp }}</span></div>
+        }
+        <p>{{ def().description }}</p>
+      </button>
+      <button
+        type="button"
+        class="inspect"
+        [attr.aria-label]="i18n.t('game.cardDetails') + ': ' + def().name"
+        [title]="i18n.t('game.cardDetails')"
+        (click)="inspect.emit(card())"
+      >ⓘ</button>
+    </div>
   `,
   styles: [`
     /* The host is the flex item of .hand: stretch it so every card in a row
        shares the row height, then fill it with the button. */
     :host { display:block; height:100%; flex:0 0 auto; scroll-snap-align:start; }
-    .card { width: 154px; height:100%; min-height:0; text-align:left; padding:9px; border-radius:13px; border:1px solid #3b4354; background:linear-gradient(155deg,#252d3a,#151a23); color:#fff; position:relative; overflow:hidden; box-shadow:0 7px 18px #0006; transition:transform .16s,border-color .16s,box-shadow .16s,filter .16s; }
+    .card-wrap{width:154px;height:100%;position:relative}
+    .card { width:100%; height:100%; min-height:0; text-align:left; padding:9px; border-radius:13px; border:1px solid #3b4354; background:linear-gradient(155deg,#252d3a,#151a23); color:#fff; position:relative; overflow:hidden; box-shadow:0 7px 18px #0006; transition:transform .16s,border-color .16s,box-shadow .16s,filter .16s; }
     /* Faction identity (Phase A.1): tinted top band + cost badge. The band is a
        pseudo-element so the gold hover/selected box-shadows below always win. */
     .card::before { content:''; position:absolute; top:0; left:0; right:0; height:4px; background: var(--faction-accent, #6b7488); border-radius: 14px 14px 0 0; }
@@ -47,14 +58,18 @@ import { FACTION_THEME } from './faction-theme';
     small { display:block; color:var(--faction-accent,#9ea7b7); margin-top:2px; text-transform:capitalize; font-size:9px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
     p { font-size:10px; color:#cbd0da; line-height:1.3; margin:5px 0 0; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
     .stats { display:flex; justify-content:space-between; gap:8px; margin-top:6px; font-size:10px; font-weight:800; }
-    @media(max-width:850px){.card{width:154px;padding:8px}.art-frame{height:116px}.art-name{font-size:11px}.stats{margin-top:5px}p{-webkit-line-clamp:1}}
+    .inspect{position:absolute;top:40px;right:7px;z-index:3;width:29px;height:29px;display:grid;place-items:center;padding:0;border:1px solid #ffffff44;border-radius:50%;background:#0b1018dd;color:#fff;font-size:15px;font-weight:900;box-shadow:0 4px 12px #0009;backdrop-filter:blur(5px)}
+    .inspect:hover{color:#19150c;background:#e5c66f;border-color:#e5c66f;transform:scale(1.06)}.inspect:focus-visible{outline:2px solid #8bd2ff;outline-offset:2px}
+    @media(max-width:850px){.card{padding:8px}.art-frame{height:116px}.art-name{font-size:11px}.stats{margin-top:5px}p{-webkit-line-clamp:1}.inspect{top:38px}}
   `],
 })
 export class CardComponent {
+  readonly i18n = inject(I18nService);
   readonly card = input.required<HandCard>();
   readonly selected = input(false);
   readonly disabled = input(false);
   readonly picked = output<HandCard>();
+  readonly inspect = output<HandCard>();
   readonly def = () => getCard(this.card().cardId);
   readonly accent = computed(() => FACTION_THEME[this.def().faction].accent);
   /** Hides the art img when the file is missing (CSS text fallback remains). */
