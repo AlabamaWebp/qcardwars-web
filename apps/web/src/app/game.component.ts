@@ -1,5 +1,5 @@
 import { Component, DestroyRef, ElementRef, computed, effect, inject, signal } from '@angular/core';
-import type { Faction } from '@qcw/game-core';
+import type { CardDefinition, ClientUnitView, Faction } from '@qcw/game-core';
 import { getCard, HandCard, ClientLaneState, PlayerId } from '@qcw/game-core';
 import { cardArtUrl, hideBrokenArt } from './card-art';
 import { CardComponent } from './card.component';
@@ -15,12 +15,12 @@ import { SoundService } from './sound.service';
   template: `
     @if (game(); as g) {
       <main class="game-shell">
-        <header>
+        <header [class.my-turn]="client.isMyTurn()">
           <div>
             <button class="ghost" (click)="client.leaveRoom()">{{ i18n.t('game.lobby') }}</button>
-            <strong>Room {{ g.roomCode }}</strong>
+            <strong class="room-code"><span>{{ i18n.t('game.room') }}</span> {{ g.roomCode }}</strong>
           </div>
-          <div class="turn" [class.mine]="client.isMyTurn()">
+          <div class="turn" [class.mine]="client.isMyTurn()" aria-live="polite">
             @if (client.reconnected()) { <span class="reconnected">{{ i18n.t('game.reconnected') }}</span> }
             {{ g.status === 'finished' ? i18n.t('game.over') : (client.isMyTurn() ? i18n.t('game.yourTurn') : i18n.t('game.oppTurn')) }}
           </div>
@@ -39,15 +39,25 @@ import { SoundService } from './sound.service';
               [title]="sound.enabled() ? i18n.t('game.soundOn') : i18n.t('game.soundOff')"
               (click)="sound.toggle()"
             >{{ sound.enabled() ? '🔊' : '🔇' }}</button>
-            <button class="end" (click)="endTurn()" [disabled]="!client.isMyTurn()">{{ i18n.t('game.endTurn') }}</button>
+            <button class="end" (click)="endTurn()" [disabled]="!client.isMyTurn()"><span aria-hidden="true">↪</span>{{ i18n.t('game.endTurn') }}</button>
           </div>
         </header>
 
-        <section class="opponent playerbar" [attr.data-player-bar]="opponentId()">
-          <div><b>{{ opponent().name }}</b><span>{{ opponent().connected ? i18n.t('game.online') : i18n.t('game.offline') }}</span></div>
-          <div>{{ i18n.t('game.hp') }} <strong>{{ opponent().hp }}</strong></div>
-          <div>{{ i18n.t('game.mana') }} {{ opponent().mana }}/{{ opponent().maxMana }}</div>
-          <div>{{ i18n.t('game.hand') }} {{ opponent().handCount }} · {{ i18n.t('game.deck') }} {{ opponent().deckCount }}</div>
+        <section
+          class="opponent playerbar"
+          [class.hero-targetable]="isHeroTargetable()"
+          [attr.role]="isHeroTargetable() ? 'button' : null"
+          [attr.tabindex]="isHeroTargetable() ? 0 : null"
+          [attr.data-player-bar]="opponentId()"
+          (click)="opponentHeroClick()"
+          (keydown.enter)="opponentHeroClick()"
+          (keydown.space)="opponentHeroClick(); $event.preventDefault()"
+        >
+          <div class="identity"><b>{{ opponent().name }}</b><span>{{ opponent().connected ? i18n.t('game.online') : i18n.t('game.offline') }}</span></div>
+          <div class="resource hp"><span>{{ i18n.t('game.hp') }}</span><strong>{{ opponent().hp }}</strong></div>
+          <div class="resource mana"><span>{{ i18n.t('game.mana') }}</span><strong>{{ opponent().mana }}/{{ opponent().maxMana }}</strong></div>
+          <div class="resource cards"><span>{{ i18n.t('game.hand') }} / {{ i18n.t('game.deck') }}</span><strong>{{ opponent().handCount }} / {{ opponent().deckCount }}</strong></div>
+          @if (isHeroTargetable()) { <div class="hero-callout">{{ i18n.t('game.targetHero') }}</div> }
           @if (opponent().fatigue > 0) {
             <div class="fatigue" [title]="i18n.t('game.fatigueFoe') + ' ' + opponent().fatigue + ' ' + i18n.t('game.fatigueTail')">☄ Fatigue {{ opponent().fatigue }}</div>
           }
@@ -55,7 +65,19 @@ import { SoundService } from './sound.service';
 
         <section class="board">
           @for (lane of g.lanes; track lane.index) {
-            <article class="lane" [attr.data-lane-index]="lane.index" [class.targetable]="selectedCard() && client.isMyTurn()" [style.--lane-accent]="laneAccent(ownSideType(lane))" [style.--lane-glow]="laneGlow(ownSideType(lane))" (click)="laneClick(lane.index)">
+            <article
+              class="lane"
+              [attr.data-lane-index]="lane.index"
+              [class.targetable]="isLaneTargetable(lane)"
+              [class.blocked]="hasTargetSelection() && !isLaneTargetable(lane)"
+              [attr.role]="isLaneTargetable(lane) ? 'button' : null"
+              [attr.tabindex]="isLaneTargetable(lane) ? 0 : null"
+              [style.--lane-accent]="laneAccent(ownSideType(lane))"
+              [style.--lane-glow]="laneGlow(ownSideType(lane))"
+              (click)="laneClick(lane.index)"
+              (keydown.enter)="laneClick(lane.index)"
+              (keydown.space)="laneClick(lane.index); $event.preventDefault()"
+            >
               <div class="lane-name">
                 @if (ownSideType(lane) === enemySideType(lane)) {
                   {{ i18n.faction(ownSideType(lane)) }} <span>#{{ lane.index + 1 }}</span>
@@ -72,11 +94,12 @@ import { SoundService } from './sound.service';
                     <img class="thumb" [src]="artFor(unit.cardId)" alt="" loading="lazy" (error)="hideArt($event)" />
                     <span class="chip-body">
                     <b>{{ cardName(unit.cardId) }}</b><span>ATK {{ unit.effectiveAtk }} · HP {{ unit.health }}/{{ unit.maxHealth }}</span>
-                    @if (unit.dot || unit.stun || unit.turnsSurvived === 0) {
+                    @if (unit.dot || unit.stun || unit.turnsSurvived === 0 || willAttack(unit)) {
                       <span class="badges">
                         @if (unit.dot) { <span class="dot-badge" title="Poisoned">☠ {{ unit.dot.turns }}</span> }
                         @if (unit.stun) { <span class="stun-badge" [title]="'Stunned: skips its next ' + unit.stun.turns + ' attack(s)'">✦ {{ unit.stun.turns }}</span> }
                         @if (unit.turnsSurvived === 0) { <span class="stagger-badge" title="Just arrived: attacks from its owner's next turn">💤</span> }
+                        @if (willAttack(unit)) { <span class="attack-badge" [title]="i18n.t('game.attacksNow')">⚔</span> }
                       </span>
                     }
                     <span class="tip">
@@ -111,14 +134,17 @@ import { SoundService } from './sound.service';
                     <img class="thumb" [src]="artFor(unit.cardId)" alt="" loading="lazy" (error)="hideArt($event)" />
                     <span class="chip-body">
                     <b>{{ cardName(unit.cardId) }}</b><span>ATK {{ unit.effectiveAtk }} · HP {{ unit.health }}/{{ unit.maxHealth }}</span>
-                    @if (unit.dot || unit.stun || unit.turnsSurvived === 0) {
+                    @if (unit.dot || unit.stun || unit.turnsSurvived === 0 || willAttack(unit)) {
                       <span class="badges">
                         @if (unit.dot) { <span class="dot-badge" title="Poisoned">☠ {{ unit.dot.turns }}</span> }
                         @if (unit.stun) { <span class="stun-badge" [title]="'Stunned: skips its next ' + unit.stun.turns + ' attack(s)'">✦ {{ unit.stun.turns }}</span> }
                         @if (unit.turnsSurvived === 0) { <span class="stagger-badge" title="Just arrived: attacks from your next turn">💤</span> }
+                        @if (willAttack(unit)) { <span class="attack-badge" [title]="i18n.t('game.attacksNow')">⚔</span> }
                       </span>
                     }
-                    @if (specialLabel(unit.cardId); as label) { <small>{{ label }} · survived {{ unit.turnsSurvived }}</small> }
+                    @if (specialLabel(unit.cardId); as label) {
+                      <small [class.ready]="canActivateSpecial(unit)">{{ canActivateSpecial(unit) ? '⚡' : '◇' }} {{ label }} · {{ specialState(unit) }}</small>
+                    }
                     <span class="tip">
                       <span class="tip-name">{{ cardName(unit.cardId) }}</span>
                       <span class="tip-meta">{{ getDef(unit.cardId).kind }} · {{ getDef(unit.cardId).faction }} · tier {{ getDef(unit.cardId).tier }}</span>
@@ -148,33 +174,46 @@ import { SoundService } from './sound.service';
           }
         </section>
 
-        <section class="self playerbar" [attr.data-player-bar]="g.selfPlayerId">
-          <div><b>{{ self().name }}</b><span>{{ self().connected ? i18n.t('game.online') : i18n.t('game.offline') }}</span></div>
-          <div>{{ i18n.t('game.hp') }} <strong>{{ self().hp }}</strong></div>
-          <div>{{ i18n.t('game.mana') }} <strong>{{ self().mana }}/{{ self().maxMana }}</strong></div>
-          <div>{{ i18n.t('game.deck') }} {{ self().deckCount }}</div>
+        <section class="self playerbar" [class.active]="client.isMyTurn()" [attr.data-player-bar]="g.selfPlayerId">
+          <div class="identity"><b>{{ self().name }}</b><span>{{ self().connected ? i18n.t('game.online') : i18n.t('game.offline') }}</span></div>
+          <div class="resource hp"><span>{{ i18n.t('game.hp') }}</span><strong>{{ self().hp }}</strong></div>
+          <div class="resource mana"><span>{{ i18n.t('game.mana') }}</span><strong>{{ self().mana }}/{{ self().maxMana }}</strong></div>
+          <div class="resource cards"><span>{{ i18n.t('game.hand') }} / {{ i18n.t('game.deck') }}</span><strong>{{ self().handCount }} / {{ self().deckCount }}</strong></div>
           @if (self().fatigue > 0) {
             <div class="fatigue" [title]="i18n.t('game.fatigueYou') + ' ' + self().fatigue + ' ' + i18n.t('game.fatigueTail')">☄ Fatigue {{ self().fatigue }}</div>
           }
         </section>
 
-        <section class="hand">
-          @for (card of self().hand ?? []; track card.uid) {
-            <qcw-card
-              [card]="card"
-              [selected]="selectedCard()?.uid === card.uid"
-              [disabled]="!client.isMyTurn() || getDef(card.cardId).cost > self().mana"
-              (picked)="pickCard($event)"
-            />
-          }
+        <section class="hand-zone">
+          <div class="hand-head">
+            <span>{{ i18n.t('game.yourHand') }}</span>
+            <span>{{ playableCardCount() }} {{ i18n.t('game.playableNow') }}</span>
+          </div>
+          <div class="hand">
+            @for (card of self().hand ?? []; track card.uid) {
+              <qcw-card
+                [card]="card"
+                [selected]="selectedCard()?.uid === card.uid"
+                [disabled]="!client.isMyTurn() || getDef(card.cardId).cost > self().mana"
+                (picked)="pickCard($event)"
+              />
+            }
+          </div>
         </section>
 
         <section class="footer-grid">
-          <div class="hint">
+          <div class="hint" aria-live="polite">
             @if (selectedCard()) {
-               {{ i18n.t('game.selA') }} <b>{{ getDef(selectedCard()!.cardId).name }}</b>{{ i18n.t('game.selB') }}
+              <span class="hint-copy"><b>{{ getDef(selectedCard()!.cardId).name }}</b> — {{ selectionHint() }}</span>
+              <span class="hint-actions">
+                @if (canQuickPlay()) { <button class="primary quick-play" (click)="playSelectedInstant()">{{ i18n.t('game.useCard') }}</button> }
+                <button class="ghost small" (click)="cancelSelection()">{{ i18n.t('game.cancel') }}</button>
+              </span>
+            } @else if (selectedSpecialLane() !== null) {
+              <span class="hint-copy">{{ i18n.t('game.chooseSpecialTarget') }}</span>
+              <button class="ghost small" (click)="cancelSelection()">{{ i18n.t('game.cancel') }}</button>
             } @else {
-              {{ i18n.t('game.hintEmpty') }}
+              <span class="hint-copy">{{ client.isMyTurn() ? i18n.t('game.hintEmpty') : i18n.t('game.waitHint') }}</span>
             }
             @if (client.error()) { <div class="error">{{ client.error()!.message }}</div> }
           </div>
@@ -243,36 +282,40 @@ import { SoundService } from './sound.service';
     }
   `,
   styles: [`
-    .game-shell { min-height:100vh; padding:14px; max-width:1500px; margin:0 auto; display:grid; gap:10px; }
-    header { display:grid; grid-template-columns:1fr auto 1fr; align-items:center; gap:10px; background:#11151d; border:1px solid #272d38; border-radius:14px; padding:10px 12px; }
-    header>div:first-child { display:flex; align-items:center; gap:12px; } .ghost{background:transparent;color:#aeb6c5;border:0;} .end{justify-self:end;background:#d7b76c;color:#111;border:0;border-radius:9px;padding:10px 18px;font-weight:800;}
-    .turn{font-size:12px;letter-spacing:.14em;color:#d26f73;font-weight:900}.turn.mine{color:#7ad78d}.reconnected{color:#7ad78d;margin-right:8px;text-transform:lowercase;letter-spacing:.04em}
-    .playerbar { display:flex; align-items:center; gap:18px; flex-wrap:wrap; padding:9px 13px; background:#11151d; border:1px solid #272d38; border-radius:12px; font-size:13px; }
-    .playerbar>div:first-child { margin-right:auto; display:flex; gap:8px; align-items:baseline; }.playerbar span{font-size:10px;color:#7ad78d}.playerbar strong{font-size:18px}
-    .board { display:grid; grid-template-columns:repeat(4,minmax(150px,1fr)); gap:8px; min-height:420px; }
+    .game-shell { height:100dvh; padding:12px; max-width:1500px; margin:0 auto; display:grid; grid-template-rows:auto auto minmax(270px,1fr) auto 258px minmax(82px,auto); gap:8px; overflow:hidden; }
+    header { display:grid; grid-template-columns:1fr auto 1fr; align-items:center; gap:10px; background:linear-gradient(135deg,#151b26,#10141c); border:1px solid #2e3746; border-radius:15px; padding:9px 11px; box-shadow:0 10px 30px #0005; position:relative; overflow:hidden; }
+    header::before{content:'';position:absolute;inset:0 auto 0 0;width:3px;background:#d7b76c;opacity:.45}header.my-turn::before{background:#76cf8b;opacity:1;box-shadow:0 0 18px #76cf8b}
+    header>div:first-child { display:flex; align-items:center; gap:12px; min-width:0; } .ghost{background:transparent;color:#aeb6c5;border:0;} .room-code{display:flex;align-items:baseline;gap:6px;white-space:nowrap}.room-code span{font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:#707a8d}
+    .end{justify-self:end;display:flex;align-items:center;gap:7px;background:linear-gradient(135deg,#e6c875,#cfa853);color:#111;border:0;border-radius:10px;padding:10px 16px;font-weight:900;box-shadow:0 6px 16px #0005, inset 0 1px #fff7}.end:not(:disabled):hover{filter:brightness(1.08);transform:translateY(-1px)}
+    .turn{font-size:11px;letter-spacing:.14em;color:#e47a80;font-weight:900;padding:6px 10px;border:1px solid #573239;border-radius:999px;background:#201318;text-align:center}.turn.mine{color:#8de39e;border-color:#315b3b;background:#112017}.reconnected{color:#7ad78d;margin-right:8px;text-transform:lowercase;letter-spacing:.04em}
+    .playerbar { display:flex; align-items:center; gap:9px; min-width:0; padding:7px 10px; background:linear-gradient(90deg,#111720,#10141b); border:1px solid #293241; border-radius:11px; font-size:12px; transition:border-color .18s,box-shadow .18s; }
+    .playerbar.active{border-color:#315b3b;box-shadow:inset 3px 0 #76cf8b,0 0 20px #76cf8b12}.identity{margin-right:auto;display:flex;gap:7px;align-items:baseline;min-width:90px}.identity b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.identity>span{font-size:9px;color:#7ad78d;white-space:nowrap}
+    .resource{display:flex;align-items:baseline;gap:5px;padding:2px 9px;border-left:1px solid #27303d;white-space:nowrap}.resource>span{font-size:9px;color:#778195;text-transform:uppercase;letter-spacing:.08em}.resource strong{font-size:16px}.resource.hp strong{color:#ff8c91}.resource.mana strong{color:#74c8ff}.resource.cards strong{color:#d9c486}
+    .hero-targetable{cursor:crosshair;border-color:#d7b76c;box-shadow:0 0 0 2px #d7b76c35,0 0 24px #d7b76c20;animation:qcw-target-pulse 1.35s ease-in-out infinite}.hero-callout{font-size:10px;font-weight:900;color:#17130b;background:#d7b76c;padding:5px 9px;border-radius:999px;white-space:nowrap}
+    .board { display:grid; grid-template-columns:repeat(4,minmax(170px,1fr)); gap:8px; min-height:0; }
     /* Faction identity (Phase A.1): --lane-accent/--lane-glow are set per lane from
        lane.type via [style.*] bindings; the gold targetable hover still wins. */
-    .lane { background:linear-gradient(#151a23,#0e1117); border:1px solid var(--lane-accent,#2d3441); box-shadow:0 0 14px -3px var(--lane-glow,transparent); border-radius:13px; padding:9px; display:grid; grid-template-rows:auto 1fr 1px 1fr; gap:8px; min-width:0; }
-    .lane.targetable:hover{border-color:#d7b76c}.lane-name{text-transform:uppercase;letter-spacing:.12em;font-size:11px;font-weight:900;color:var(--lane-accent,#d7b76c);display:flex;justify-content:space-between;gap:6px}.lane-name span{color:#687183}.lane-name .vs{color:#687183}.lane-name .side{text-transform:uppercase;letter-spacing:.1em}
-    .slot{display:grid;align-content:center;gap:6px;min-height:150px}.divider{background:#343b48}.empty{display:grid;place-items:center;height:100%;border:1px dashed #313847;border-radius:10px;color:#515b6c;font-size:11px;text-transform:uppercase;letter-spacing:.1em}
+    .lane { background:radial-gradient(circle at 50% 45%,var(--lane-glow,transparent),transparent 58%),linear-gradient(#151b25,#0d1118); border:1px solid var(--lane-accent,#2d3441); border-color:color-mix(in srgb,var(--lane-accent,#2d3441) 68%,#2d3441); box-shadow:0 0 16px -5px var(--lane-glow,transparent),inset 0 1px #ffffff08; border-radius:13px; padding:8px; display:grid; grid-template-rows:auto minmax(0,1fr) 1px minmax(0,1fr); gap:6px; min-width:0; position:relative; transition:opacity .18s,border-color .18s,box-shadow .18s,transform .18s; }
+    .lane.targetable{cursor:crosshair;border-color:#e4c674;box-shadow:0 0 0 2px #d7b76c35,0 0 24px #d7b76c26,inset 0 1px #fff2}.lane.targetable:hover{transform:translateY(-2px);box-shadow:0 0 0 2px #d7b76c66,0 10px 28px #0008}.lane.targetable::after{content:'+';position:absolute;right:8px;bottom:8px;width:22px;height:22px;display:grid;place-items:center;border-radius:50%;background:#d7b76c;color:#17130b;font-weight:900;box-shadow:0 4px 12px #0008}.lane.blocked{opacity:.48;filter:saturate(.7)}
+    .lane-name{text-transform:uppercase;letter-spacing:.1em;font-size:10px;font-weight:900;color:var(--lane-accent,#d7b76c);display:flex;justify-content:space-between;align-items:center;gap:5px;min-height:24px}.lane-name span{color:#687183}.lane-name .vs{color:#687183}.lane-name .side{text-transform:uppercase;letter-spacing:.07em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .slot{display:grid;align-content:center;gap:5px;min-height:0}.divider{background:linear-gradient(90deg,transparent,#465063,transparent);position:relative}.divider::after{content:'VS';position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);font-size:8px;line-height:14px;padding:0 5px;border-radius:999px;color:#646f82;background:#111720}.empty{display:grid;place-items:center;height:100%;min-height:54px;border:1px dashed #313b4b;border-radius:9px;color:#566176;font-size:9px;text-transform:uppercase;letter-spacing:.11em;background:#080b101f}
     /* --chip-accent is set per chip from getCard(cardId).faction; the inset shadow
        (not a wider border) tints the left edge with zero layout shift. */
-    .unit,.building{width:100%;position:relative;border:1px solid #3c4554;background:#202631;color:#fff;border-radius:10px;padding:10px;text-align:left;box-shadow:inset 3px 0 0 0 var(--chip-accent,transparent)}
+    .unit,.building{width:100%;position:relative;border:1px solid #3c4554;background:linear-gradient(135deg,#222a37,#181e28);color:#fff;border-radius:10px;padding:8px;text-align:left;box-shadow:inset 3px 0 0 0 var(--chip-accent,transparent),0 6px 14px #0004}
     /* Horizontal chips: a fixed square art thumb on the left, text on the right.
        Fixed thumb sizes keep every chip uniform no matter the source file. */
-    .unit{display:grid;grid-template-columns:84px minmax(0,1fr);gap:10px;align-items:center}
-    .chip-body{display:grid;gap:5px;min-width:0}
+    .unit{display:grid;grid-template-columns:66px minmax(0,1fr);gap:8px;align-items:center}
+    .chip-body{display:grid;gap:4px;min-width:0}
     .chip-body>b{font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
     .chip-body>span,.chip-body>small{font-size:11px;color:#c1c7d2}
-    .chip-body>small{color:#d7b76c}
-    .building{display:grid;grid-template-columns:56px minmax(0,1fr);gap:8px;align-items:center;font-size:11px;background:#242017;border-color:#50462e;color:#e7d49e}
+    .chip-body>small{color:#8f98a9;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.chip-body>small.ready{color:#f0ce70;font-weight:800;text-shadow:0 0 12px #d7b76c55}
+    .building{display:grid;grid-template-columns:48px minmax(0,1fr);gap:7px;align-items:center;font-size:10px;background:linear-gradient(135deg,#292418,#1c1912);border-color:#50462e;color:#e7d49e}
     .building-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
     /* Board art: fixed square thumbs with a frame, served from /cards/<id>.png
        (same-faction stand-in while a card has no own art). A missing file hides
        the img via hideArt, leaving the text. */
-    .thumb{display:block;width:84px;height:84px;object-fit:cover;border-radius:8px;background:#12161d;border:1px solid #2e3646}
-    .building .thumb{width:56px;height:56px}
-    @media(max-width:850px){.unit{grid-template-columns:64px minmax(0,1fr);gap:8px}.thumb{width:64px;height:64px}}
+    .thumb{display:block;width:66px;height:66px;object-fit:cover;border-radius:8px;background:#12161d;border:1px solid #2e3646}
+    .building .thumb{width:48px;height:48px}
     /* Board tooltips (Phase A.1) — CSS-only, catalog data only (same visibility
        baseline as the existing chips: board units/buildings are already fully
        visible to both players). Absolutely positioned, so they never join the
@@ -302,9 +345,11 @@ import { SoundService } from './sound.service';
     .dot-badge{font-size:10px;line-height:1.4;font-weight:800;color:#7ad78d;background:#101a13;border:1px solid #2c5c3a;border-radius:6px;padding:0 4px}
     .stun-badge{font-size:10px;line-height:1.4;font-weight:800;color:#e8b44f;background:#20180a;border:1px solid #6e5426;border-radius:6px;padding:0 4px}
     .stagger-badge{font-size:10px;line-height:1.4;font-weight:800;color:#8fb7e8;background:#0f1620;border:1px solid #2d4a6b;border-radius:6px;padding:0 4px}
+    .attack-badge{font-size:10px;line-height:1.4;font-weight:900;color:#ffcf72;background:#271b0b;border:1px solid #725122;border-radius:6px;padding:0 4px;box-shadow:0 0 10px #ffb84a35}
     .unit:has(.badges) .chip-body>b{padding-right:34px}
     .unit:has(.badges :nth-child(2)) .chip-body>b{padding-right:62px}
     .unit:has(.badges :nth-child(3)) .chip-body>b{padding-right:90px}
+    .unit:has(.badges :nth-child(4)) .chip-body>b{padding-right:116px}
     .tip-poison{display:block;font-size:11px;font-weight:700;color:#7ad78d;margin-top:5px}
     .tip-bonus{display:block;font-size:11px;font-weight:700;color:#d7b76c;margin-top:2px}
     .tip-stun{display:block;font-size:11px;font-weight:700;color:#e8b44f;margin-top:5px}
@@ -313,8 +358,9 @@ import { SoundService } from './sound.service';
     .fatigue{color:#ff8a5c;font-weight:800;font-size:12px}
     .unit:hover .tip,.unit:focus .tip,.building:hover .tip,.building:focus .tip{display:block}
     @media(max-width:850px){.tip{left:6px;right:6px;width:auto;transform:none}.slot.enemy .tip{bottom:auto;top:calc(100% + 8px)}}
-    .hand { display:flex; gap:8px; overflow-x:auto; padding:10px 2px 14px; min-height:230px; align-items:stretch; }
-    .footer-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.hint,.log{background:#11151d;border:1px solid #272d38;border-radius:12px;padding:12px;font-size:12px;color:#aeb6c5}.log{display:grid;gap:4px;align-content:start}.error{margin-top:8px;color:#ff9da5}
+    .hand-zone{display:grid;grid-template-rows:auto minmax(0,1fr);min-height:0;border:1px solid #252e3b;border-radius:13px;background:linear-gradient(#10151d,#0d1117);overflow:hidden}.hand-head{display:flex;justify-content:space-between;align-items:center;padding:7px 10px 5px;color:#d7b76c;text-transform:uppercase;font-size:9px;letter-spacing:.12em;font-weight:900}.hand-head span:last-child{color:#778195;letter-spacing:.04em;text-transform:none}
+    .hand { display:flex; gap:8px; overflow-x:auto; overflow-y:hidden; padding:3px 8px 9px; min-height:0; align-items:stretch; scroll-snap-type:x proximity; scrollbar-gutter:stable; }
+    .footer-grid{display:grid;grid-template-columns:minmax(280px,.8fr) minmax(0,1.2fr);gap:8px;min-height:0}.hint,.log{background:linear-gradient(135deg,#121823,#0f141c);border:1px solid #293241;border-radius:11px;padding:9px 11px;font-size:11px;color:#aeb6c5;min-height:0;overflow:auto}.hint{display:flex;align-items:center;justify-content:space-between;gap:10px;border-left:3px solid #d7b76c}.hint-copy{line-height:1.4}.hint-actions{display:flex;align-items:center;gap:6px;flex:0 0 auto}.quick-play{padding:6px 10px!important;font-size:10px}.log{display:grid;gap:3px;align-content:start}.log>div:not(.log-head){min-height:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.error{margin-top:5px;color:#ff9da5}
     .log-head{display:flex;align-items:center;justify-content:space-between;gap:8px;color:#d7b76c;text-transform:uppercase;letter-spacing:.1em;font-size:10px;font-weight:800}
     .ghost.small{background:transparent;color:#aeb6c5;border:1px solid #3e4655;padding:4px 10px;border-radius:7px;font-size:11px}
     /* Full-log modal: the list scrolls inside the modal, never the page. */
@@ -322,18 +368,16 @@ import { SoundService } from './sound.service';
     .full-log{display:grid;gap:4px;max-height:min(60vh,480px);overflow-y:auto;font-size:12px;color:#c1c7d2;margin-top:10px}
     .full-log .seq{color:#687183;margin-right:6px}
     .modal-backdrop{position:fixed;inset:0;background:#000b;display:grid;place-items:center;padding:20px}.modal{background:#151a23;border:1px solid #3b4352;border-radius:18px;padding:28px;max-width:440px;text-align:center}.modal h2{font-size:48px;margin:4px}.modal p{color:#aeb6c5;line-height:1.5}.modal button{background:#d7b76c;border:0;padding:11px 18px;border-radius:9px;font-weight:800}.eyebrow{text-transform:uppercase;letter-spacing:.15em;color:#d7b76c;font-size:10px}
-    @media(max-width:850px){.board{overflow:auto;grid-template-columns:repeat(4,180px);min-height:0}.footer-grid{grid-template-columns:1fr}header{grid-template-columns:1fr auto}.turn{display:none}.playerbar{gap:10px}.game-shell{padding:8px}}
-    /* No page scroll on mobile: the shell is exactly one viewport tall and
-       every growing region scrolls internally (board/hand/log), so
-       document height never exceeds the viewport. Desktop keeps its natural
-       page flow untouched. */
+    @keyframes qcw-target-pulse{0%,100%{box-shadow:0 0 0 2px #d7b76c22,0 0 18px #d7b76c10}50%{box-shadow:0 0 0 3px #d7b76c55,0 0 28px #d7b76c28}}
     @media(max-width:850px){
-      .game-shell{height:100dvh;max-height:100dvh;overflow:hidden;grid-template-rows:auto auto minmax(0,1fr) auto auto auto}
-      .slot{min-height:118px}
-      .hand{min-height:0;max-height:28dvh;overflow:auto}
-      .footer-grid{min-height:0}
-      .hint,.log{min-height:0;max-height:12dvh;overflow-y:auto}
+      .game-shell{padding:7px;height:100dvh;grid-template-rows:auto auto minmax(190px,1fr) auto minmax(180px,26dvh) minmax(105px,17dvh);gap:6px}
+      header{grid-template-columns:minmax(0,1fr) auto;padding:7px 8px}.turn{grid-column:1/-1;grid-row:2;padding:4px 8px;font-size:9px}.header-right{grid-column:2;grid-row:1}.room-code{display:grid;gap:0}.room-code span{display:none}.end{padding:9px 11px;font-size:12px;max-width:112px;line-height:1.1}.end span{display:none}.ghost.lang{padding:6px 8px!important}.sound{padding:7px!important}
+      .playerbar{gap:4px;padding:6px 8px;overflow:hidden}.identity{min-width:0}.identity>span{display:none}.resource{padding:1px 5px}.resource>span{font-size:8px}.resource strong{font-size:14px}.resource.cards{display:flex}.resource.cards>span{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}.resource.cards::before{content:'▱';color:#d9c486;font-size:11px}.hero-callout{font-size:8px;padding:4px 6px}
+      .board{overflow-x:auto;overflow-y:hidden;overscroll-behavior:contain;grid-template-columns:repeat(4,178px);min-height:0;scroll-snap-type:x mandatory;scrollbar-width:thin}.lane{scroll-snap-align:start;padding:6px;gap:4px;grid-template-rows:21px minmax(0,1fr) 1px minmax(0,1fr)}.lane-name{min-height:21px;font-size:9px}.lane.blocked{opacity:.55}.lane.targetable::after{right:5px;bottom:5px;width:19px;height:19px}
+      .slot{min-height:0}.empty{min-height:38px;font-size:8px}.unit{grid-template-columns:42px minmax(0,1fr);gap:6px;padding:5px}.thumb{width:42px;height:42px}.building{grid-template-columns:34px minmax(0,1fr);padding:4px}.building .thumb{width:34px;height:34px}.chip-body{gap:2px}.chip-body>b{font-size:10px}.chip-body>span,.chip-body>small{font-size:9px}.tip{display:none!important}.badges{top:3px;right:3px;gap:2px}.badges>span{font-size:8px;padding:0 3px}.unit:has(.badges) .chip-body>b{padding-right:25px}.unit:has(.badges :nth-child(2)) .chip-body>b{padding-right:46px}.unit:has(.badges :nth-child(3)) .chip-body>b{padding-right:67px}.unit:has(.badges :nth-child(4)) .chip-body>b{padding-right:88px}
+      .hand-zone{border-radius:11px}.hand-head{padding:5px 8px 3px}.hand{padding:2px 7px 6px;gap:7px;scroll-snap-type:x mandatory}.footer-grid{grid-template-columns:1fr;grid-template-rows:auto minmax(0,1fr);gap:5px}.hint,.log{padding:7px 9px;max-height:none}.hint{font-size:10px}.log{font-size:10px}.log-head{position:sticky;top:-7px;background:#111720;padding:3px 0}.modal{padding:20px;max-width:94vw}.modal h2{font-size:38px}
     }
+    @media(min-width:851px) and (max-height:820px){.game-shell{grid-template-rows:auto auto minmax(230px,1fr) auto 222px 76px}.unit{grid-template-columns:54px minmax(0,1fr)}.thumb{width:54px;height:54px}.building{grid-template-columns:40px minmax(0,1fr)}.building .thumb{width:40px;height:40px}}
     .modal-actions{display:flex;gap:10px;justify-content:center;margin-top:12px}.modal-actions .ghost{background:transparent;color:#aeb6c5;border:1px solid #3e4655;padding:11px 18px;border-radius:9px}.modal .waiting{color:#d7b76c;min-height:1.5em}
     /* Phase D D-2 — match summary stats in the victory modal. */
     .stats{width:100%;margin:14px 0 4px;border-collapse:collapse;font-size:12px;color:#c1c7d2}
@@ -370,7 +414,7 @@ import { SoundService } from './sound.service';
     .lane.lane-hit{animation:qcw-lane-hit .5s ease-in-out}
     @keyframes qcw-pulse{0%,100%{background:transparent}30%{background:rgba(215,183,108,.18)}}
     .turn.pulse{animation:qcw-pulse .6s ease}
-    @media (prefers-reduced-motion: reduce){.pop,.hit,.lane-hit,.pulse{animation:none !important}}
+    @media (prefers-reduced-motion: reduce){.pop,.hit,.lane-hit,.pulse,.hero-targetable{animation:none !important}}
   `],
 })
 export class GameComponent {
@@ -392,6 +436,21 @@ export class GameComponent {
   readonly opponent = computed(() => this.game()!.players[this.opponentId()]);
   /** Phase D D-1 — solo match: the opponent seat is the server-side AI (auto-rematches). */
   readonly isSolo = computed(() => this.game()?.solo === true);
+  readonly selectedDefinition = computed<CardDefinition | null>(() => {
+    const card = this.selectedCard();
+    return card ? getCard(card.cardId) : null;
+  });
+  readonly playableCardCount = computed(() => {
+    const game = this.game();
+    const self = game?.players[game.selfPlayerId];
+    if (!game || !self || !this.client.isMyTurn()) return 0;
+    return (self.hand ?? []).filter((card) => {
+      const def = getCard(card.cardId);
+      if (def.cost > self.mana) return false;
+      if (def.kind === 'power' && (def.target === 'none' || def.target === 'enemy-hero')) return true;
+      return game.lanes.some((lane) => this.isDefinitionTargetable(def, lane));
+    }).length;
+  });
 
   /** Highest visual-event id already applied (Phase A.2). */
   private processedFx = 0;
@@ -520,6 +579,104 @@ export class GameComponent {
   }
   side(lane: ClientLaneState, playerId: PlayerId) { return lane.sides[playerId]; }
 
+  hasTargetSelection(): boolean {
+    return Boolean(this.selectedCard()) || this.selectedSpecialLane() !== null;
+  }
+
+  private isDefinitionTargetable(def: CardDefinition, lane: ClientLaneState): boolean {
+    const game = this.game();
+    if (!game) return false;
+    const own = lane.sides[game.selfPlayerId];
+    const enemy = lane.sides[this.opponentId()];
+    const factionFits = def.faction === 'universal' || def.faction === this.ownSideType(lane);
+    if (def.kind === 'unit') {
+      return factionFits && !own.unit && (def.onPlay?.target !== 'enemy-unit' || Boolean(enemy.unit));
+    }
+    if (def.kind === 'building') return factionFits && !own.building;
+    switch (def.target) {
+      case 'enemy-unit': return Boolean(enemy.unit);
+      case 'friendly-unit': return Boolean(own.unit);
+      case 'enemy-building': return Boolean(enemy.building);
+      case 'lane': return true;
+      case 'enemy-hero':
+      case 'none': return false;
+    }
+  }
+
+  isLaneTargetable(lane: ClientLaneState): boolean {
+    if (!this.client.isMyTurn()) return false;
+    const selected = this.selectedDefinition();
+    if (selected) return this.isDefinitionTargetable(selected, lane);
+    const sourceLane = this.selectedSpecialLane();
+    if (sourceLane === null) return false;
+    const game = this.game()!;
+    const source = game.lanes[sourceLane].sides[game.selfPlayerId].unit;
+    if (!source) return false;
+    const def = getCard(source.cardId);
+    if (def.kind !== 'unit' || !def.special) return false;
+    if (def.special.target === 'enemy-unit') return Boolean(lane.sides[this.opponentId()].unit);
+    if (def.special.target === 'friendly-unit') return Boolean(lane.sides[game.selfPlayerId].unit);
+    return false;
+  }
+
+  isHeroTargetable(): boolean {
+    const def = this.selectedDefinition();
+    return Boolean(this.client.isMyTurn() && def?.kind === 'power' && def.target === 'enemy-hero');
+  }
+
+  canQuickPlay(): boolean {
+    const def = this.selectedDefinition();
+    return Boolean(def?.kind === 'power' && def.target === 'none');
+  }
+
+  selectionHint(): string {
+    const def = this.selectedDefinition();
+    if (!def) return '';
+    if (def.kind === 'unit') return this.i18n.t('game.chooseLane');
+    if (def.kind === 'building') return this.i18n.t('game.chooseBuildingLane');
+    switch (def.target) {
+      case 'enemy-hero': return this.i18n.t('game.chooseHero');
+      case 'enemy-unit': return this.i18n.t('game.chooseEnemyUnit');
+      case 'friendly-unit': return this.i18n.t('game.chooseFriendlyUnit');
+      case 'enemy-building': return this.i18n.t('game.chooseEnemyBuilding');
+      case 'lane': return this.i18n.t('game.chooseEffectLane');
+      case 'none': return this.i18n.t('game.noTargetNeeded');
+    }
+  }
+
+  willAttack(unit: ClientUnitView): boolean {
+    const game = this.game();
+    return Boolean(game?.status === 'playing' && game.activePlayerId === unit.ownerId && unit.turnsSurvived > 0 && !unit.stun);
+  }
+
+  canActivateSpecial(unit: ClientUnitView): boolean {
+    const game = this.game();
+    const def = getCard(unit.cardId);
+    return Boolean(
+      game && this.client.isMyTurn() && def.kind === 'unit' && def.special &&
+      unit.turnsSurvived > 0 && unit.specialUsesRemaining > 0 &&
+      game.players[game.selfPlayerId].mana >= def.special.cost && this.specialHasTarget(def.special.target)
+    );
+  }
+
+  private specialHasTarget(target: 'self' | 'friendly-unit' | 'enemy-unit' | 'enemy-hero' | 'none'): boolean {
+    const game = this.game();
+    if (!game) return false;
+    if (target === 'enemy-unit') return game.lanes.some((lane) => Boolean(lane.sides[this.opponentId()].unit));
+    if (target === 'friendly-unit') return game.lanes.some((lane) => Boolean(lane.sides[game.selfPlayerId].unit));
+    return true;
+  }
+
+  specialState(unit: ClientUnitView): string {
+    const def = getCard(unit.cardId);
+    if (def.kind !== 'unit' || !def.special) return '';
+    if (unit.specialUsesRemaining <= 0) return this.i18n.t('game.specialSpent');
+    if (unit.turnsSurvived < 1) return this.i18n.t('game.specialSleeping');
+    if (this.self().mana < def.special.cost) return `${def.special.cost} ${this.i18n.t('game.manaShort')}`;
+    if (!this.specialHasTarget(def.special.target)) return this.i18n.t('game.specialNoTarget');
+    return `${this.i18n.t('game.specialReady')} · ${def.special.cost}`;
+  }
+
   pickCard(card: HandCard) {
     this.client.clearError();
     this.selectedSpecialLane.set(null);
@@ -530,7 +687,8 @@ export class GameComponent {
     const selected = this.selectedCard();
     const game = this.game();
     if (!selected || !game || !this.client.isMyTurn()) return;
-    const def = getCard(selected.cardId);
+    const lane = game.lanes[laneIndex];
+    if (!lane || !this.isLaneTargetable(lane)) return;
     const action = {
       type: 'play-card' as const,
       expectedRevision: game.revision,
@@ -540,6 +698,36 @@ export class GameComponent {
     };
     this.client.sendAction(action);
     this.selectedCard.set(null);
+  }
+
+  opponentHeroClick() {
+    if (!this.isHeroTargetable()) return;
+    this.sendSelectedPower(0);
+  }
+
+  playSelectedInstant() {
+    if (!this.canQuickPlay()) return;
+    this.sendSelectedPower(0);
+  }
+
+  private sendSelectedPower(laneIndex: number) {
+    const selected = this.selectedCard();
+    const game = this.game();
+    if (!selected || !game || !this.client.isMyTurn()) return;
+    this.client.sendAction({
+      type: 'play-card',
+      expectedRevision: game.revision,
+      handCardUid: selected.uid,
+      laneIndex,
+      targetLaneIndex: laneIndex,
+    });
+    this.selectedCard.set(null);
+  }
+
+  cancelSelection() {
+    this.selectedCard.set(null);
+    this.selectedSpecialLane.set(null);
+    this.client.clearError();
   }
 
   selectTarget(laneIndex: number, event: Event) {
@@ -570,6 +758,7 @@ export class GameComponent {
     if (!unit) return;
     const card = getCard(unit.cardId);
     if (card.kind !== 'unit' || !card.special) return;
+    if (!this.canActivateSpecial(unit)) return;
     if (card.special.target === 'self' || card.special.target === 'enemy-hero' || card.special.target === 'none') {
       this.client.sendAction({
         type: 'activate-special',
