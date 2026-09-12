@@ -151,7 +151,9 @@ function startTurn(state: GameState, playerId: PlayerId): void {
       addLog(state, `War Drums: ${player.name}'s ${boosted} unit(s) each gain +1 ATK.`);
     }
   }
-  addLog(state, `${player.name} starts turn ${state.turnNumber} with ${player.mana} mana.`);
+  if (state.status === 'playing') {
+    addLog(state, `${player.name} starts turn ${state.turnNumber} with ${player.mana} mana.`);
+  }
 }
 
 function otherPlayerId(state: GameState, playerId: PlayerId): PlayerId {

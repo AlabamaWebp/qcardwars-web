@@ -1149,7 +1149,7 @@ export const CARD_CATALOG: readonly CardDefinition[] = [
   },
   {
     id: 'zombie-plague-bearer',
-    name: 'Plague Bearer',
+    name: 'Spore Carrier',
     kind: 'unit',
     faction: 'zombie',
     tier: 2,

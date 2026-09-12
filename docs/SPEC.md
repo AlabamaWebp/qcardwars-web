@@ -198,7 +198,7 @@ reproducibility). `chooseAiAction(state, playerId)` returns exactly one legal ac
 
 `simulation.ts` drives real engine matches (AI vs AI, seeded decks, 4000-action cap per game) and reports seat
 win counts, first-mover win rate, turn-length distribution, capped-game count, per-seat damage, and top card
-frequency. Run: `pnpm --filter @qcw/game-core sim <games> <seed>` (default 300 games, seed 42). Identical seeds
+frequency. Run: `pnpm --filter @qcw/game-core sim <games> <seed>` (default 400 games, seed 1000). Identical seeds
 produce identical reports (determinism is pinned by tests). Use it before/after any catalog or stat change;
 treat per-card play-rate as an AI artifact (the policy is cost-greedy) and anchor balance decisions on structural
 metrics (seat symmetry, first-mover rate, stall/cap rate, turn length).

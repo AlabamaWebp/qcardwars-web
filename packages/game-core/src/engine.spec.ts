@@ -2292,7 +2292,7 @@ describe('M2 catalog: 15 new cards', () => {
     expect(state.lanes[3].sides.p2.unit?.dot).toEqual({ amount: 2, turns: 2 });
   });
 
-  it('Plague Bearer poisons the enemy unit 3/2 on play (onPlay enemy-unit dot)', () => {
+  it('Spore Carrier poisons the enemy unit 3/2 on play (onPlay enemy-unit dot)', () => {
     let state = game(252);
     state = setActive(state, 'p1');
     state.lanes[3].sides.p2.unit = {

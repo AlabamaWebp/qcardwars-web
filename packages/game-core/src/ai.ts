@@ -245,7 +245,8 @@ function scoreEnemyUnit(
   if (!unit) return -1000;
   let score = effectiveAttack(state, lane, enemyId) * 2;
   for (const effect of effects) {
-    if (effect.type === 'stun' && unit.stun) return -1000; // already stunned: do not waste
+    // A stun on an already-stunned unit or a 0-ATK unit has no value: veto.
+    if (effect.type === 'stun' && (unit.stun || effectiveAttack(state, lane, enemyId) <= 0)) return -1000;
     if (effect.type === 'damage-unit' && effect.amount >= unit.health) score += 10; // lethal
     if (effect.type === 'destroy-unit') score += 8;
     if (effect.type === 'debuff-unit' && unit.attack > 0) score += 1;

@@ -364,6 +364,23 @@ describe('M4: heuristic lane and target selection', () => {
     const next = applyAction(state, action);
     expect(next.lanes[0].sides.p2.unit?.attack).toBe(7); // 5 + 2
   });
+
+  it('does not waste a stun on a 0-ATK enemy (debuffed units have nothing to skip)', () => {
+    let state = aiTurn(game());
+    state.players.p2.hand = [];
+    state = structuredClone(state);
+    placeCustomUnit(state, 0, 'p1', 0, 4); // ready (turnsSurvived 1) but debuffed to 0 ATK
+    const stasis = giveCard(state, 'p2', 'power-stasis-field'); // cost 2 — would be a waste
+    state = stasis.state;
+    const bucket = giveCard(state, 'p2', 'bucket'); // cost 1 fallback
+    state = bucket.state;
+
+    const action = chooseAiAction(state, 'p2');
+    expect(action?.type).toBe('play-card');
+    if (action?.type === 'play-card') {
+      expect(action.handCardUid).toBe(bucket.uid); // stasis vetoed, not played
+    }
+  });
 });
 
 describe('M2 catalog: AI plays the new cards legally', () => {
