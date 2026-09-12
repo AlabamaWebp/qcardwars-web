@@ -3,6 +3,7 @@ import { shuffle } from './random';
 import {
   BuildingCardDefinition,
   ClientGameView,
+  ClientLaneState,
   Effect,
   GameAction,
   GameConfig,
@@ -792,6 +793,26 @@ export function setPlayerConnected(state: GameState, playerId: PlayerId, connect
   return next;
 }
 
+/**
+ * M3 — map one internal lane to its client view: clone unit/building state
+ * (no internal fields leak) and attach the server-computed effectiveAtk so
+ * the UI shows the real number the unit would attack with.
+ */
+function toClientLane(state: GameState, lane: LaneState): ClientLaneState {
+  const sides: ClientLaneState['sides'] = {} as ClientLaneState['sides'];
+  for (const id of state.playerOrder) {
+    const side = lane.sides[id];
+    const unit = side.unit
+      ? { ...clone(side.unit), effectiveAtk: effectiveAttack(state, lane, id) }
+      : null;
+    sides[id] = {
+      unit,
+      building: side.building ? clone(side.building) : null,
+    };
+  }
+  return { index: lane.index, type: lane.type, sides };
+}
+
 export function toClientView(
   state: GameState,
   viewerId: PlayerId,
@@ -829,7 +850,7 @@ export function toClientView(
     selfPlayerId: viewerId,
     playerOrder: [...state.playerOrder] as [PlayerId, PlayerId],
     players,
-    lanes: clone(state.lanes),
+    lanes: state.lanes.map((lane) => toClientLane(state, lane)),
     winnerId: state.winnerId,
     log: clone(state.log),
     config: clone(state.config),

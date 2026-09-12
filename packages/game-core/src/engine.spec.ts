@@ -2345,3 +2345,57 @@ describe('M2 catalog: 15 new cards', () => {
     expect(sentinel.specialUsesRemaining).toBe(0);
   });
 });
+
+describe('M3 client view (M1/M2 mechanics visibility)', () => {
+  it('exposes turnsSurvived: 0 when fresh, still 0 at end of the owner\'s turn, 1 once the owner\'s turn restarts', () => {
+    let state = game(501);
+    state = setActive(state, 'p1');
+    state = playCard(state, 'p1', 'combine-metrocop', 1);
+    let view = toClientView(state, 'p2');
+    expect(view.lanes[1].sides.p1.unit?.turnsSurvived).toBe(0);
+    state = endTurn(state, 'p1'); // stagger: no attack, slot still 0
+    view = toClientView(state, 'p1');
+    expect(view.lanes[1].sides.p1.unit?.turnsSurvived).toBe(0);
+    state = endTurn(state, 'p2'); // p1's startTurn increments
+    view = toClientView(state, 'p1');
+    expect(view.lanes[1].sides.p1.unit?.turnsSurvived).toBe(1);
+  });
+
+  it('exposes the stun slot on the client view (Stasis Field on a staggered unit)', () => {
+    let state = game(502);
+    state = setActive(state, 'p1');
+    state = playCard(state, 'p1', 'combine-metrocop', 1);
+    state = endTurn(state, 'p1'); // metrocop staggered, no attack to skip
+    state = setActive(state, 'p2');
+    state = playCard(state, 'p2', 'power-stasis-field', 1);
+    const view = toClientView(state, 'p2');
+    expect(view.lanes[1].sides.p1.unit?.stun).toEqual({ turns: 1 });
+    expect(view.lanes[1].sides.p1.unit?.turnsSurvived).toBe(0);
+    expect(view.lanes[1].sides.p2.unit?.stun).toBeUndefined();
+  });
+
+  it('exposes server-computed effectiveAtk: swarm bonus across lanes plus own-lane building bonus', () => {
+    let state = game(503);
+    state = setActive(state, 'p1');
+    state = playCard(state, 'p1', 'antlion-nectar-swarm', 0); // 2/2, swarm 2
+    state = playCard(state, 'p1', 'universal-demolition-volunteer', 1); // 3/2, swarm 1
+    state = playCard(state, 'p1', 'building-ammo-cache', 1); // +1 ATK own lane
+    const view = toClientView(state, 'p2');
+    const swarm = view.lanes[0].sides.p1.unit;
+    expect(swarm?.attack).toBe(2); // raw attack still exposed
+    expect(swarm?.effectiveAtk).toBe(4); // 2 base + 2 swarm × 1 other friendly
+    const volunteer = view.lanes[1].sides.p1.unit;
+    expect(volunteer?.attack).toBe(3);
+    expect(volunteer?.effectiveAtk).toBe(5); // 3 base + 1 building + 1 swarm × 1 other
+    // The opponent side has no unit: no phantom effectiveAtk.
+    expect(view.lanes[0].sides.p2.unit).toBeNull();
+  });
+
+  it('exposes fatigue on the client player view', () => {
+    const state = structuredClone(game(504));
+    state.players.p1.fatigue = 4;
+    const view = toClientView(state, 'p2');
+    expect(view.players.p1.fatigue).toBe(4);
+    expect(view.players.p2.fatigue).toBe(0);
+  });
+});

@@ -1,6 +1,6 @@
 import { Component, DestroyRef, ElementRef, computed, effect, inject, signal } from '@angular/core';
 import type { Faction } from '@qcw/game-core';
-import { getCard, HandCard, LaneState, PlayerId } from '@qcw/game-core';
+import { getCard, HandCard, ClientLaneState, PlayerId } from '@qcw/game-core';
 import { CardComponent } from './card.component';
 import { FACTION_THEME } from './faction-theme';
 import { GameClientService, VisualEvent } from './game-client.service';
@@ -40,6 +40,9 @@ import { SoundService } from './sound.service';
           <div>HP <strong>{{ opponent().hp }}</strong></div>
           <div>Mana {{ opponent().mana }}/{{ opponent().maxMana }}</div>
           <div>Hand {{ opponent().handCount }} · Deck {{ opponent().deckCount }}</div>
+          @if (opponent().fatigue > 0) {
+            <div class="fatigue" [title]="'Empty deck: takes ' + opponent().fatigue + ' damage on each empty draw (grows by 1 each time)'">☄ Fatigue {{ opponent().fatigue }}</div>
+          }
         </section>
 
         <section class="board">
@@ -49,13 +52,20 @@ import { SoundService } from './sound.service';
               <div class="slot enemy">
                 @if (side(lane, opponentId()).unit; as unit) {
                   <button class="unit" [attr.data-unit-uid]="unit.uid" [style.--chip-accent]="chipAccent(unit.cardId)" (click)="selectTarget(lane.index, $event)">
-                    <b>{{ cardName(unit.cardId) }}</b><span>ATK {{ unit.attack }} · HP {{ unit.health }}/{{ unit.maxHealth }}</span>
-                    @if (unit.dot) { <span class="dot-badge" title="Poisoned">☠ {{ unit.dot.turns }}</span> }
+                    <b>{{ cardName(unit.cardId) }}</b><span>ATK {{ unit.effectiveAtk }} · HP {{ unit.health }}/{{ unit.maxHealth }}</span>
+                    <span class="badges">
+                      @if (unit.dot) { <span class="dot-badge" title="Poisoned">☠ {{ unit.dot.turns }}</span> }
+                      @if (unit.stun) { <span class="stun-badge" [title]="'Stunned: skips its next ' + unit.stun.turns + ' attack(s)'">✦ {{ unit.stun.turns }}</span> }
+                      @if (unit.turnsSurvived === 0) { <span class="stagger-badge" title="Just arrived: attacks from its owner's next turn">💤</span> }
+                    </span>
                     <span class="tip">
                       <span class="tip-name">{{ cardName(unit.cardId) }}</span>
                       <span class="tip-meta">{{ getDef(unit.cardId).kind }} · {{ getDef(unit.cardId).faction }} · tier {{ getDef(unit.cardId).tier }}</span>
-                      <span class="tip-stats">ATK {{ unit.attack }} · HP {{ unit.health }}/{{ unit.maxHealth }}</span>
+                      <span class="tip-stats">ATK {{ unit.effectiveAtk }} · HP {{ unit.health }}/{{ unit.maxHealth }}</span>
+                      @if (unit.effectiveAtk > unit.attack) { <span class="tip-bonus">+{{ unit.effectiveAtk - unit.attack }} ATK from building/swarm bonuses.</span> }
                       @if (unit.dot) { <span class="tip-poison">Poison: {{ unit.dot.amount }} damage at the start of its owner's turn, {{ unit.dot.turns }} {{ unit.dot.turns === 1 ? 'turn' : 'turns' }} left.</span> }
+                      @if (unit.stun) { <span class="tip-stun">Stunned: skips its next {{ unit.stun.turns }} attack{{ unit.stun.turns === 1 ? '' : 's' }}.</span> }
+                      @if (unit.turnsSurvived === 0) { <span class="tip-stagger">Just arrived: attacks from its owner's next turn.</span> }
                       <span class="tip-desc">{{ getDef(unit.cardId).description }}</span>
                     </span>
                   </button>
@@ -74,14 +84,21 @@ import { SoundService } from './sound.service';
               <div class="slot own">
                 @if (side(lane, g.selfPlayerId).unit; as unit) {
                   <button class="unit" [attr.data-unit-uid]="unit.uid" [style.--chip-accent]="chipAccent(unit.cardId)" (click)="ownUnitClick(lane.index, $event)">
-                    <b>{{ cardName(unit.cardId) }}</b><span>ATK {{ unit.attack }} · HP {{ unit.health }}/{{ unit.maxHealth }}</span>
-                    @if (unit.dot) { <span class="dot-badge" title="Poisoned">☠ {{ unit.dot.turns }}</span> }
+                    <b>{{ cardName(unit.cardId) }}</b><span>ATK {{ unit.effectiveAtk }} · HP {{ unit.health }}/{{ unit.maxHealth }}</span>
+                    <span class="badges">
+                      @if (unit.dot) { <span class="dot-badge" title="Poisoned">☠ {{ unit.dot.turns }}</span> }
+                      @if (unit.stun) { <span class="stun-badge" [title]="'Stunned: skips its next ' + unit.stun.turns + ' attack(s)'">✦ {{ unit.stun.turns }}</span> }
+                      @if (unit.turnsSurvived === 0) { <span class="stagger-badge" title="Just arrived: attacks from your next turn">💤</span> }
+                    </span>
                     @if (specialLabel(unit.cardId); as label) { <small>{{ label }} · survived {{ unit.turnsSurvived }}</small> }
                     <span class="tip">
                       <span class="tip-name">{{ cardName(unit.cardId) }}</span>
                       <span class="tip-meta">{{ getDef(unit.cardId).kind }} · {{ getDef(unit.cardId).faction }} · tier {{ getDef(unit.cardId).tier }}</span>
-                      <span class="tip-stats">ATK {{ unit.attack }} · HP {{ unit.health }}/{{ unit.maxHealth }}</span>
+                      <span class="tip-stats">ATK {{ unit.effectiveAtk }} · HP {{ unit.health }}/{{ unit.maxHealth }}</span>
+                      @if (unit.effectiveAtk > unit.attack) { <span class="tip-bonus">+{{ unit.effectiveAtk - unit.attack }} ATK from building/swarm bonuses.</span> }
                       @if (unit.dot) { <span class="tip-poison">Poison: {{ unit.dot.amount }} damage at the start of your turn, {{ unit.dot.turns }} {{ unit.dot.turns === 1 ? 'turn' : 'turns' }} left.</span> }
+                      @if (unit.stun) { <span class="tip-stun">Stunned: skips its next {{ unit.stun.turns }} attack{{ unit.stun.turns === 1 ? '' : 's' }}.</span> }
+                      @if (unit.turnsSurvived === 0) { <span class="tip-stagger">Just arrived: attacks from your next turn.</span> }
                       <span class="tip-desc">{{ getDef(unit.cardId).description }}</span>
                     </span>
                   </button>
@@ -105,6 +122,9 @@ import { SoundService } from './sound.service';
           <div>HP <strong>{{ self().hp }}</strong></div>
           <div>Mana <strong>{{ self().mana }}/{{ self().maxMana }}</strong></div>
           <div>Deck {{ self().deckCount }}</div>
+          @if (self().fatigue > 0) {
+            <div class="fatigue" [title]="'Empty deck: you take ' + self().fatigue + ' damage on each empty draw (grows by 1 each time)'">☄ Fatigue {{ self().fatigue }}</div>
+          }
         </section>
 
         <section class="hand">
@@ -211,11 +231,25 @@ import { SoundService } from './sound.service';
     .tip-meta{display:block;font-size:10px;letter-spacing:.06em;text-transform:capitalize;color:#8b93a5;margin-top:2px}
     .tip-stats{display:block;font-size:11px;font-weight:700;color:#d7b76c;margin-top:5px}
     .tip-desc{display:block;font-size:11px;line-height:1.45;color:#c7ccd7;margin-top:5px}
-    /* Phase C — poison badge: absolute so it never joins the .unit grid rows. */
-    .dot-badge{position:absolute;top:6px;right:6px;font-size:10px;line-height:1.4;font-weight:800;color:#7ad78d;background:#101a13;border:1px solid #2c5c3a;border-radius:6px;padding:0 4px}
+    /* M3 — badge row: poison (☠), stun (✦) and stagger (💤) share one
+       absolutely positioned row at the chip's top-right so multiple badges
+       never overlap each other or the name. :has() reserves name padding
+       scaled to the badge count. */
+    .badges{position:absolute;top:5px;right:5px;display:flex;gap:3px;pointer-events:none}
+    .dot-badge{font-size:10px;line-height:1.4;font-weight:800;color:#7ad78d;background:#101a13;border:1px solid #2c5c3a;border-radius:6px;padding:0 4px}
+    .stun-badge{font-size:10px;line-height:1.4;font-weight:800;color:#e8b44f;background:#20180a;border:1px solid #6e5426;border-radius:6px;padding:0 4px}
+    .stagger-badge{font-size:10px;line-height:1.4;font-weight:800;color:#8fb7e8;background:#0f1620;border:1px solid #2d4a6b;border-radius:6px;padding:0 4px}
+    .unit:has(.badges)>b{padding-right:34px}
+    .unit:has(.badges :nth-child(2))>b{padding-right:62px}
+    .unit:has(.badges :nth-child(3))>b{padding-right:90px}
     .tip-poison{display:block;font-size:11px;font-weight:700;color:#7ad78d;margin-top:5px}
+    .tip-bonus{display:block;font-size:11px;font-weight:700;color:#d7b76c;margin-top:2px}
+    .tip-stun{display:block;font-size:11px;font-weight:700;color:#e8b44f;margin-top:5px}
+    .tip-stagger{display:block;font-size:11px;font-weight:700;color:#8fb7e8;margin-top:5px}
+    /* M3 — fatigue readout on the player bars (GA-3a finite decks). */
+    .fatigue{color:#ff8a5c;font-weight:800;font-size:12px}
     .unit:hover>.tip,.unit:focus>.tip,.building:hover>.tip,.building:focus>.tip{display:block}
-    @media(max-width:850px){.tip{left:6px;right:6px;width:auto;transform:none}.slot.enemy .tip{bottom:auto;top:calc(100% + 8px)}.unit:has(.dot-badge)>b{padding-right:38px}}
+    @media(max-width:850px){.tip{left:6px;right:6px;width:auto;transform:none}.slot.enemy .tip{bottom:auto;top:calc(100% + 8px)}}
     .hand { display:flex; gap:8px; overflow-x:auto; padding:10px 2px 14px; min-height:230px; align-items:flex-start; }
     .footer-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.hint,.log{background:#11151d;border:1px solid #272d38;border-radius:12px;padding:12px;font-size:12px;color:#aeb6c5}.log{display:grid;gap:4px}.error{margin-top:8px;color:#ff9da5}
     .modal-backdrop{position:fixed;inset:0;background:#000b;display:grid;place-items:center;padding:20px}.modal{background:#151a23;border:1px solid #3b4352;border-radius:18px;padding:28px;max-width:440px;text-align:center}.modal h2{font-size:48px;margin:4px}.modal p{color:#aeb6c5;line-height:1.5}.modal button{background:#d7b76c;border:0;padding:11px 18px;border-radius:9px;font-weight:800}.eyebrow{text-transform:uppercase;letter-spacing:.15em;color:#d7b76c;font-size:10px}
@@ -392,7 +426,7 @@ export class GameComponent {
     const card = getCard(cardId);
     return card.kind === 'unit' ? card.special?.name ?? null : null;
   }
-  side(lane: LaneState, playerId: PlayerId) { return lane.sides[playerId]; }
+  side(lane: ClientLaneState, playerId: PlayerId) { return lane.sides[playerId]; }
 
   pickCard(card: HandCard) {
     this.client.clearError();

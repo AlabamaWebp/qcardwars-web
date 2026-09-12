@@ -294,6 +294,40 @@ export type ClientAction =
       expectedRevision: number;
     };
 
+/**
+ * M3 — the unit side of a lane as exposed to clients. Mirrors UnitInstance's
+ * public fields and adds the server-computed effective attack. All unit state
+ * here is public information (SPEC "Visibility"): both players see all lanes.
+ * Clients never recompute rules from this view.
+ */
+export interface ClientUnitView {
+  uid: string;
+  cardId: string;
+  ownerId: PlayerId;
+  attack: number;
+  health: number;
+  maxHealth: number;
+  specialUsesRemaining: number;
+  dot?: { amount: number; turns: number };
+  /** GA-1a — 0 = "just arrived" (stagger): attacks from the owner's next turn. */
+  turnsSurvived: number;
+  /** GA-2a — the unit skips its next attack(s); present only while stunned. */
+  stun?: { turns: number };
+  /** GA-4b — base ATK + own-lane building bonus + swarm bonus (server-computed). */
+  effectiveAtk: number;
+}
+
+export interface ClientPlayerLaneState {
+  unit: ClientUnitView | null;
+  building: BuildingInstance | null;
+}
+
+export interface ClientLaneState {
+  index: number;
+  type: LaneType;
+  sides: Record<PlayerId, ClientPlayerLaneState>;
+}
+
 export interface ClientPlayerView {
   id: PlayerId;
   name: string;
@@ -318,7 +352,7 @@ export interface ClientGameView {
   selfPlayerId: PlayerId;
   playerOrder: [PlayerId, PlayerId];
   players: Record<PlayerId, ClientPlayerView>;
-  lanes: LaneState[];
+  lanes: ClientLaneState[];
   winnerId: PlayerId | null;
   log: GameLogEntry[];
   config: GameConfig;
