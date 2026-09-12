@@ -12,13 +12,20 @@ This spec resolves unknown original details into explicit, testable web defaults
   always laid out in canonical pool order
 - Starting HP: 30 (web default; not claimed original)
 - Mana cap: 10 (web default; not claimed original)
-- Starting hand: 4
+- Starting hand: 4; the second player draws one extra card at match start (second-player compensation)
 - Draw: 1 at the start of each player's turn
 - Hand soft cap: 10; excess draw is discarded/logged
 - First active player: chosen deterministically from match seed for tests; randomized for normal rooms
 - Player's first turn starts with 1/1 mana. Each subsequent personal turn increases max mana by 1 up to 10 and
   refills current mana to max.
-- Deck exhaustion: draw a `Bucket` fallback rather than fatigue damage for baseline fidelity to the fallback idea.
+- Deck exhaustion (finite-deck fatigue, supersedes the old `Bucket` fallback baseline): decks are finite. Drawing
+  from an empty deck instead increments that player's `fatigue` counter by 1 and deals damage equal to the counter
+  (1, 2, 3, …). Fatigue damage can end the match at 0 HP.
+- Stagger: a freshly played unit arrives with `turnsSurvived` 0 and does NOT attack on the turn it is played; it
+  attacks from its owner's next turn. It still blocks as a defender from the moment it is placed.
+- War Drums escalation: from personal turn `escalationTurn` (default 15, configurable via
+  `GameConfig.escalationTurn`) onward, at the start of each of that player's turns every surviving unit of that
+  player gains +1 ATK permanently. Guarantees every match eventually resolves.
 
 ## Lane model
 
@@ -39,13 +46,18 @@ rules in data.
 
 ## Turn flow
 
-1. Start turn: increment/refill mana, draw one card, apply start-turn building effects, age surviving units.
+1. Start turn: increment/refill mana, draw one card (fatigue damage if the deck is empty), apply start-turn
+   building effects, apply War Drums escalation when due, age surviving units (`turnsSurvived` +1), tick any
+   damage-over-time on this player's units.
 2. Action phase: active player may play any number of affordable legal cards and activate legal specials.
 3. End turn: active player's surviving units attack lane-by-lane from index 0→3.
-4. If opposing unit exists, attacker deals its current ATK to that unit. Baseline has **no automatic retaliation**;
-   the opponent attacks on its own turn. Dead units are removed immediately after each lane resolves.
-5. If no opposing unit exists at attack resolution, deal ATK to opposing hero.
-6. If hero HP <= 0, end match immediately. Otherwise pass active player and begin their turn.
+4. If opposing unit exists, attacker deals its effective ATK (base + own-lane building bonus + swarm bonus) to that
+   unit. Baseline has **no automatic retaliation**; the opponent attacks on its own turn. Dead units are removed
+   immediately after each lane resolves. A unit that kills an enemy unit triggers its owner's `drawOnKill` if set.
+5. Staggered units (`turnsSurvived` 0) skip their attack; a stunned READY unit skips its attack and the stun slot
+   ticks down (a staggered stunned unit keeps its slot — it had no attack to skip).
+6. If no opposing unit exists at attack resolution, deal ATK to opposing hero.
+7. If hero HP <= 0, end match immediately. Otherwise pass active player and begin their turn.
 
 This attack timing is a web-baseline choice because exact original timing is not reliably confirmed in public
 text. Keep combat isolated so it can be changed without rewriting networking/UI.
@@ -55,6 +67,15 @@ text. Keep combat isolated so it can be changed without rewriting networking/UI.
 ### Unit
 
 Required data: cost, faction/universal, ATK, HP. Optional special.
+
+Optional keyword fields (all data-driven, engine-enforced):
+
+- `onPlay`: effect applied immediately after placement. Targeting is lane-relative only (`'self'`,
+  `'friendly-unit'`, `'enemy-unit'` in the played lane, `'enemy-hero'`, or `'none'`). Target validation happens
+  BEFORE placement: if the required target is missing the whole play fails atomically (no mana spent, no unit
+  placed).
+- `swarm`: +N ATK per OTHER friendly unit anywhere on the board (included in the unit's effective ATK).
+- `drawOnKill`: draws N cards when this unit destroys an enemy UNIT in combat.
 
 Special baseline rules:
 
@@ -74,20 +95,24 @@ are defined by card data and invoked at start-turn or combat calculation. A powe
 
 One-shot card. Pay mana, validate target, resolve immediately, move card to discard.
 
-## Baseline card/effect vocabulary
+## Card/effect vocabulary
 
-Keep the engine data-driven but intentionally small for the overnight build:
+The engine is data-driven. The full supported effect set:
 
-- `damage-unit`
-- `damage-hero`
-- `heal-unit`
-- `buff-unit`
-- `draw`
-- `destroy-building`
-- `heal-own-lane-unit-at-turn-start` (building)
-- `attack-bonus-own-lane` (building)
+- `damage-unit`, `damage-hero`
+- `aoe` (lane-wide damage to every enemy unit in the target lane)
+- `heal-unit`, `heal-hero`
+- `buff-unit` (`attack`, `health`), `debuff-unit`
+- `dot` (`amount` per turn, `turns`; a new dot REPLACES an existing one — dots never stack)
+- `stun` (`turns`; the target skips its next attack(s) on ready turns; a new stun REPLACES an existing one)
+- `bounce-unit` (removed from the lane; a FRESH hand card with new uid returns to the owner — buffs/dots/stuns are
+  lost; discarded if the owner's hand is full)
+- `discard-random` (`amount`; the opponent discards that many random cards — seeded, deterministic; whole hand if
+  fewer)
+- `draw`, `gain-mana`, `add-card` (specific cardId), `destroy-unit`, `destroy-building`
+- Building passives: `heal-own-lane-unit-at-turn-start`, `attack-bonus-own-lane`
 
-Do not build a general scripting language until P0/P1 acceptance is complete.
+Do not build a general scripting language; extend only by adding discrete, tested primitives like the above.
 
 ## Visibility
 
@@ -104,6 +129,10 @@ Enforcement (`engine.toClientView`): each player sees their own current HP/mana 
 and real current mana** (`maxMana` is also always reported). The opponent's hand is `null` (card identities hidden),
 while hand and deck counts are still shown. Showing the opponent's current HP/mana is a web-baseline choice (a
 supersession of the earlier max-only baseline); it is not claimed as original.
+
+The client view exposes server-computed per-unit fields (`ClientUnitView`): `effectiveAtk` (base + own-lane building
+bonus + swarm), `turnsSurvived`, and the current `stun`/`dot` slots, plus per-player `fatigue`. Clients DISPLAY these
+values; they must never recompute rules locally (effective attack, stagger, stun/dot ticks are authoritative).
 
 ## Networking/revision rules
 
@@ -144,7 +173,32 @@ supersession of the earlier max-only baseline); it is not claimed as original.
   single connected player can never start a solo game. Both players must be connected to accept.
 - Either player can leave back to lobby.
 
-## Content target for overnight build
+## Content
 
-Minimum playable catalog: 24–32 cards total, spread across four factions + universal, all 3 card kinds, and at
-least 6 units with specials. Exact balance is secondary to diversity and correctness.
+Catalog: 87 cards (72 baseline + 15 gameplay-depth cards from the M1–M2 depth pass), all six lane factions +
+universal, all 3 card kinds, many units with specials. Decks contain one copy of every card whose faction is in
+play. Balance is maintained by the AI-vs-AI simulation harness (see below); the current measured state and the
+last balance pass are recorded in `docs/balance-notes.md`.
+
+## Solo AI (M4)
+
+The server can fill the second seat with a deterministic heuristic AI (no `Math.random`; fully seed-driven for
+reproducibility). `chooseAiAction(state, playerId)` returns exactly one legal action (or an end-turn intent) using:
+
+- lane scoring for plays: kill priority (stagger-aware landing attack), outmatched-lane avoidance, block value,
+  `onPlay` target vetoes, swarm/board-presence bonus, building co-location;
+- target scoring for powers/specials: stun the highest effective-attack enemy, lethal/destroy bonuses, bounce
+  unblocked threats, heal the most-wounded ally, buff the strongest ally, AOE → highest enemy value in a lane;
+- negative target scores are hard vetoes (a card is never wasted on an already-stunned enemy or a full-health
+  ally);
+- every candidate is trial-applied against a pure clone of the state before being returned, so legality is always
+  engine-validated; fallback is end-turn.
+
+## Simulation harness (M4)
+
+`simulation.ts` drives real engine matches (AI vs AI, seeded decks, 4000-action cap per game) and reports seat
+win counts, first-mover win rate, turn-length distribution, capped-game count, per-seat damage, and top card
+frequency. Run: `pnpm --filter @qcw/game-core sim <games> <seed>` (default 300 games, seed 42). Identical seeds
+produce identical reports (determinism is pinned by tests). Use it before/after any catalog or stat change;
+treat per-card play-rate as an AI artifact (the policy is cost-greedy) and anchor balance decisions on structural
+metrics (seat symmetry, first-mover rate, stall/cap rate, turn length).
