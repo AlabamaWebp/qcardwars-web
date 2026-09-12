@@ -1,15 +1,61 @@
 import { Injectable, computed, signal } from '@angular/core';
-import type { LaneType } from '@qcw/game-core';
+import { CARD_CATALOG } from '@qcw/game-core';
+import type { CardKind, LaneType } from '@qcw/game-core';
 
 export type Lang = 'en' | 'ru';
 
 /**
  * Minimal EN/RU localization (request: "перевод всего приложения на русский").
  * No dependency: a flat key dictionary + a `qcw.lang` localStorage slot.
- * Translated: all UI chrome plus card descriptions and special descriptions.
- * Card names remain canonical gameplay data; engine logs and server errors are
- * also intentionally left untouched because they are authoritative strings.
+ * Translated: all UI chrome plus every catalog card/special display field.
+ * Canonical definitions remain in game-core; these maps only affect rendering.
  */
+
+/** RU display names keyed by canonical id. Keep this map complete with CARD_CATALOG. */
+const CARD_NAMES_RU: Record<string, string> = {
+  bucket: 'Ведро', 'antlion-runner': 'Муравьиный бегун', 'antlion-worker': 'Муравьиный рабочий', 'antlion-guard': 'Муравьиный страж',
+  'combine-metrocop': 'Метрокоп', 'combine-soldier': 'Солдат Альянса', 'combine-elite': 'Элитный боец Альянса',
+  'rebel-scout': 'Разведчик повстанцев', 'rebel-medic': 'Медик повстанцев', 'rebel-veteran': 'Ветеран повстанцев',
+  'zombie-shambler': 'Шатающийся зомби', 'zombie-fast': 'Быстрый зомби', 'zombie-poison': 'Ядовитый зомби',
+  'universal-mercenary': 'Наёмник', 'antlion-tinker': 'Муравьиный техник', 'combine-laser': 'Лазер Альянса',
+  'rebel-commander': 'Командир повстанцев', 'zombie-bloater': 'Раздувшийся зомби', 'building-field-hospital': 'Полевой госпиталь',
+  'building-ammo-cache': 'Склад боеприпасов', 'building-nest': 'Муравьиное гнездо', 'building-grave-mound': 'Могильный холм',
+  'building-bunker': 'Бункер', 'power-strike': 'Сфокусированный удар', 'power-rally': 'Приказ к атаке',
+  'power-shelling': 'Артобстрел', 'power-sabotage': 'Саботаж', 'power-resupply': 'Пополнение запасов',
+  'power-berserk': 'Берсерк', 'power-venom': 'Ядовитый спрей', 'power-rot': 'Гниль',
+  'power-scorch': 'Выжженная земля', 'power-mend': 'Экстренная аптечка', 'power-overcharge': 'Перезарядка',
+  'power-salvage': 'Спасательная операция', 'power-execution': 'Протокол уничтожения', 'power-wither': 'Токсин увядания',
+  'antlion-spitter': 'Муравьиный плевальщик', 'rebel-engineer': 'Инженер повстанцев', 'combine-drone': 'Силовой дрон',
+  'antlion-swarm': 'Рой жуков', 'antlion-hunter': 'Муравьиный охотник', 'antlion-queen': 'Муравьиная королева',
+  'building-larva-pool': 'Бассейн личинок', 'power-acid-rain': 'Кислотный дождь', 'combine-juggernaut': 'Джаггернаут Альянса',
+  'building-power-substation': 'Силовая подстанция', 'rebel-guerrilla': 'Партизан', 'rebel-ambusher': 'Засадник',
+  'building-supply-drop': 'Сброс припасов', 'power-medic-convoy': 'Медицинский конвой', 'power-landmine': 'Мина',
+  'zombie-ghoul': 'Гуль', 'zombie-plague': 'Разносчик чумы', 'zombie-brute': 'Зомби-громила', 'zombie-titan': 'Титан-зомби',
+  'building-tomb': 'Гробница', 'power-extermination': 'Истребление', 'universal-guard': 'Страж', 'power-overclock': 'Разгон',
+  'guardian-sentinel': 'Страж-сентинел', 'guardian-priest': 'Жрец стражей', 'guardian-bulwark': 'Бастион стражей',
+  'building-sacred-shrine': 'Священная святыня', 'power-sacred-light': 'Священный свет', 'power-holy-shield': 'Святой щит',
+  'wraith-stalker': 'Призрачный преследователь', 'wraith-reaper': 'Призрачный жнец', 'wraith-lord': 'Повелитель призраков',
+  'building-wraith-alter': 'Алтарь призраков', 'power-haunt': 'Преследование', 'power-soul-theft': 'Похищение души',
+  'power-stasis-field': 'Поле стазиса', 'power-terror-raid': 'Рейд ужаса', 'universal-demolition-volunteer': 'Доброволец-подрывник',
+  'universal-drill-sergeant': 'Сержант-инструктор', 'antlion-tunnel-harrier': 'Туннельный налётчик',
+  'antlion-chitin-skirmisher': 'Хитиновый застрельщик', 'antlion-nectar-swarm': 'Нектарный рой',
+  'combine-riot-marshal': 'Маршал метро', 'combine-metro-bouncer': 'Вышибала метро',
+  'rebel-propaganda-runner': 'Курьер пропаганды', 'rebel-wrench-tinker': 'Мастер-ремонтник',
+  'zombie-rotting-warden': 'Страж гниения', 'zombie-plague-bearer': 'Разносчик спор', 'wraith-phantom-harrier': 'Фантомный налётчик',
+  'guardian-sacred-sentinel': 'Священный страж',
+};
+
+const SPECIAL_NAMES_RU: Record<string, string> = {
+  'antlion-worker': 'Кислотный плевок', 'antlion-guard': 'Последний рывок', 'combine-soldier': 'Подкрепление',
+  'combine-elite': 'Импульсный выстрел', 'rebel-medic': 'Полевое лечение', 'rebel-veteran': 'Натиск',
+  'zombie-fast': 'Пожирание', 'antlion-tinker': 'Плевальщик', 'combine-laser': 'Наводящий лазер',
+  'rebel-commander': 'Боевой дух', 'zombie-bloater': 'Подрыв', 'antlion-spitter': 'Ядовитый налёт',
+  'rebel-engineer': 'Полевой медкомплект', 'combine-drone': 'Перехват мощности', 'antlion-hunter': 'Хватка клешней',
+  'antlion-queen': 'Отложить яйца', 'combine-juggernaut': 'Протокол зачистки', 'rebel-ambusher': 'Клыки гадюки',
+  'zombie-plague': 'Распространение чумы', 'zombie-brute': 'Гнилая хватка', 'guardian-priest': 'Благословение',
+  'guardian-bulwark': 'Укрепление', 'wraith-reaper': 'Прикосновение смерти', 'wraith-lord': 'Поглощающий взгляд',
+  'combine-metro-bouncer': 'Отскок', 'guardian-sacred-sentinel': 'Эгида',
+};
 
 const CARD_DESCRIPTIONS_RU: Record<string, string> = {
   bucket: 'Запасной юнит: простой, надёжный и неизбежный.',
@@ -168,6 +214,8 @@ const STRINGS = {
   'game.online': ['online', 'в сети'],
   'game.offline': ['disconnected', 'отключён'],
   'game.hp': ['HP', 'ХП'],
+  'game.atk': ['ATK', 'АТК'],
+  'game.hpShort': ['HP', 'ОЗ'],
   'game.mana': ['Mana', 'Мана'],
   'game.hand': ['Hand', 'Рука'],
   'game.deck': ['Deck', 'Колода'],
@@ -207,6 +255,15 @@ const STRINGS = {
   'game.special': ['Special', 'Спецудар'],
   'game.uses': ['uses', 'заряда'],
   'game.attacksNow': ['Attacks when this turn ends', 'Атакует в конце этого хода'],
+  'game.poisoned': ['Poisoned', 'Отравлен'],
+  'game.stunnedNext': ['Stunned: skips next attacks', 'Оглушён: пропускает атак'],
+  'game.justArrivedEnemy': ["Just arrived: attacks from its owner's next turn", 'Только что прибыл: атакует со следующего хода владельца'],
+  'game.justArrivedYou': ["Just arrived: attacks from your next turn", 'Только что прибыл: атакует со следующего хода'],
+  'game.attackBonus': ['ATK from building/swarm bonuses.', 'АТК от бонусов здания/роя.'],
+  'game.poison': ['Poison', 'Яд'],
+  'game.damageAtOwnerTurn': ["damage at the start of its owner's turn", 'урона в начале хода владельца'],
+  'game.stunned': ['Stunned', 'Оглушён'],
+  'game.skipsNextAttacks': ['skips next attacks:', 'пропускает атак:'],
   'game.specialReady': ['ready', 'готово'],
   'game.specialSleeping': ['ready next turn', 'готово со следующего хода'],
   'game.specialSpent': ['no uses left', 'заряды исчерпаны'],
@@ -220,6 +277,7 @@ const STRINGS = {
   'game.close': ['Close', 'Закрыть'],
   'game.fatigueYou': ['Empty deck: you take', 'Колода пуста: вы получаете'],
   'game.fatigueFoe': ['Empty deck: takes', 'Колода пуста: получает'],
+  'game.fatigue': ['Fatigue', 'Усталость'],
   'game.fatigueTail': ['damage on each empty draw (grows by 1 each time)', 'урона за каждую пустую доборку (растёт на 1 каждый раз)'],
   'game.victory': ['Victory', 'Победа'],
   'game.defeat': ['Defeat', 'Поражение'],
@@ -288,9 +346,47 @@ export class I18nService {
     return this.isRu() ? (SPECIAL_DESCRIPTIONS_RU[cardId] ?? fallback) : fallback;
   }
 
+  /** Localize a canonical card name without changing the authoritative definition. */
+  cardName(cardId: string, fallback = cardId): string {
+    if (!this.isRu()) return fallback;
+    return CARD_NAMES_RU[cardId] ?? fallback;
+  }
+
+  /** Localize the special attached to a card; English always uses canonical data. */
+  specialName(cardId: string, fallback = ''): string {
+    if (!this.isRu()) return fallback;
+    return SPECIAL_NAMES_RU[cardId] ?? fallback;
+  }
+
+  cardKind(kind: CardKind): string {
+    const labels: Record<CardKind, [string, string]> = {
+      unit: ['unit', 'юнит'], building: ['building', 'здание'], power: ['power', 'сила'],
+    };
+    return this.lang() === 'ru' ? labels[kind][1] : labels[kind][0];
+  }
+
+  tier(tier: number): string {
+    return this.lang() === 'ru' ? `уровень ${tier}` : `tier ${tier}`;
+  }
+
+  attackLabel(value: number): string {
+    return this.lang() === 'ru' ? `АТК ${value}` : `ATK ${value}`;
+  }
+
+  healthLabel(value: number, max?: number): string {
+    return this.lang() === 'ru' ? `ОЗ ${value}${max === undefined ? '' : `/${max}`}` : `HP ${value}${max === undefined ? '' : `/${max}`}`;
+  }
+
+  /** Development/CI guard: the RU name map must cover the full canonical catalog. */
+  static readonly russianCardNameCoverage = CARD_CATALOG.every((card) => Boolean(CARD_NAMES_RU[card.id]));
+
+  /** Development/CI guard: every card with a special has a localized special name. */
+  static readonly russianSpecialNameCoverage = CARD_CATALOG.filter((card) => card.kind === 'unit' && card.special)
+    .every((card) => Boolean(SPECIAL_NAMES_RU[card.id]));
+
   /** Localized lane/faction name for board frames and pickers. */
   faction(type: LaneType | 'universal'): string {
-    if (type === 'universal') return type;
+    if (type === 'universal') return this.lang() === 'ru' ? 'универсальный' : type;
     return this.t(`faction.${type}` as I18nKey);
   }
 

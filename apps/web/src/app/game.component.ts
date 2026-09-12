@@ -1,5 +1,5 @@
 import { Component, DestroyRef, ElementRef, HostListener, computed, effect, inject, signal } from '@angular/core';
-import type { CardDefinition, ClientUnitView, Faction } from '@qcw/game-core';
+import type { CardDefinition, ClientUnitView, Faction, GameLogEntry } from '@qcw/game-core';
 import { getCard, HandCard, ClientLaneState, PlayerId } from '@qcw/game-core';
 import { cardArtUrl, hideBrokenArt } from './card-art';
 import { CardComponent } from './card.component';
@@ -59,7 +59,7 @@ import { SoundService } from './sound.service';
           <div class="resource cards"><span>{{ i18n.t('game.hand') }} / {{ i18n.t('game.deck') }}</span><strong>{{ opponent().handCount }} / {{ opponent().deckCount }}</strong></div>
           @if (isHeroTargetable()) { <div class="hero-callout">{{ i18n.t('game.targetHero') }}</div> }
           @if (opponent().fatigue > 0) {
-            <div class="fatigue" [title]="i18n.t('game.fatigueFoe') + ' ' + opponent().fatigue + ' ' + i18n.t('game.fatigueTail')">☄ Fatigue {{ opponent().fatigue }}</div>
+            <div class="fatigue" [title]="i18n.t('game.fatigueFoe') + ' ' + opponent().fatigue + ' ' + i18n.t('game.fatigueTail')">☄ {{ i18n.t('game.fatigue') }} {{ opponent().fatigue }}</div>
           }
         </section>
 
@@ -90,55 +90,55 @@ import { SoundService } from './sound.service';
               </div>
               <div class="slot enemy">
                 @if (side(lane, opponentId()).unit; as unit) {
-                  <button class="unit" [attr.data-unit-uid]="unit.uid" [style.--chip-accent]="chipAccent(unit.cardId)" (click)="selectTarget(lane.index, $event)">
-                    <img class="thumb" [src]="artFor(unit.cardId)" alt="" loading="lazy" (error)="hideArt($event)" />
+                  <div class="chip-shell"><button class="unit" [attr.data-unit-uid]="unit.uid" [style.--chip-accent]="chipAccent(unit.cardId)" (click)="selectTarget(lane.index, $event)">
+                    <img class="thumb" [src]="artFor(unit.cardId)" [alt]="cardName(unit.cardId)" loading="lazy" (error)="hideArt($event)" />
                     <span class="chip-body">
-                    <b>{{ cardName(unit.cardId) }}</b><span>ATK {{ unit.effectiveAtk }} · HP {{ unit.health }}/{{ unit.maxHealth }}</span>
+                    <b>{{ cardName(unit.cardId) }}</b><span>{{ i18n.attackLabel(unit.effectiveAtk) }} · {{ i18n.healthLabel(unit.health, unit.maxHealth) }}</span>
                     @if (unit.dot || unit.stun || unit.turnsSurvived === 0 || willAttack(unit)) {
                       <span class="badges">
-                        @if (unit.dot) { <span class="dot-badge" title="Poisoned">☠ {{ unit.dot.turns }}</span> }
-                        @if (unit.stun) { <span class="stun-badge" [title]="'Stunned: skips its next ' + unit.stun.turns + ' attack(s)'">✦ {{ unit.stun.turns }}</span> }
-                        @if (unit.turnsSurvived === 0) { <span class="stagger-badge" title="Just arrived: attacks from its owner's next turn">💤</span> }
+                        @if (unit.dot) { <span class="dot-badge" [title]="i18n.t('game.poisoned')">☠ {{ unit.dot.turns }}</span> }
+                        @if (unit.stun) { <span class="stun-badge" [title]="i18n.t('game.stunnedNext') + ' ' + unit.stun.turns">✦ {{ unit.stun.turns }}</span> }
+                        @if (unit.turnsSurvived === 0) { <span class="stagger-badge" [title]="i18n.t('game.justArrivedEnemy')">💤</span> }
                         @if (willAttack(unit)) { <span class="attack-badge" [title]="i18n.t('game.attacksNow')">⚔</span> }
                       </span>
                     }
                     <span class="tip">
                       <span class="tip-name">{{ cardName(unit.cardId) }}</span>
-                      <span class="tip-meta">{{ getDef(unit.cardId).kind }} · {{ getDef(unit.cardId).faction }} · tier {{ getDef(unit.cardId).tier }}</span>
-                      <span class="tip-stats">ATK {{ unit.effectiveAtk }} · HP {{ unit.health }}/{{ unit.maxHealth }}</span>
-                      @if (unit.effectiveAtk > unit.attack) { <span class="tip-bonus">+{{ unit.effectiveAtk - unit.attack }} ATK from building/swarm bonuses.</span> }
-                      @if (unit.dot) { <span class="tip-poison">Poison: {{ unit.dot.amount }} damage at the start of its owner's turn, {{ unit.dot.turns }} {{ unit.dot.turns === 1 ? 'turn' : 'turns' }} left.</span> }
-                      @if (unit.stun) { <span class="tip-stun">Stunned: skips its next {{ unit.stun.turns }} attack{{ unit.stun.turns === 1 ? '' : 's' }}.</span> }
-                      @if (unit.turnsSurvived === 0) { <span class="tip-stagger">Just arrived: attacks from its owner's next turn.</span> }
+                      <span class="tip-meta">{{ i18n.cardKind(getDef(unit.cardId).kind) }} · {{ i18n.faction(getDef(unit.cardId).faction) }} · {{ i18n.tier(getDef(unit.cardId).tier) }}</span>
+                      <span class="tip-stats">{{ i18n.attackLabel(unit.effectiveAtk) }} · {{ i18n.healthLabel(unit.health, unit.maxHealth) }}</span>
+                      @if (unit.effectiveAtk > unit.attack) { <span class="tip-bonus">+{{ unit.effectiveAtk - unit.attack }} {{ i18n.t('game.attackBonus') }}</span> }
+                      @if (unit.dot) { <span class="tip-poison">{{ i18n.t('game.poison') }}: {{ unit.dot.amount }} {{ i18n.t('game.damageAtOwnerTurn') }}, {{ unit.dot.turns }}.</span> }
+                      @if (unit.stun) { <span class="tip-stun">{{ i18n.t('game.stunned') }}: {{ i18n.t('game.skipsNextAttacks') }} {{ unit.stun.turns }}.</span> }
+                      @if (unit.turnsSurvived === 0) { <span class="tip-stagger">{{ i18n.t('game.justArrivedEnemy') }}</span> }
                       <span class="tip-desc">{{ i18n.cardDescription(unit.cardId, getDef(unit.cardId).description) }}</span>
                     </span>
                     </span>
-                  </button>
+                  </button><button type="button" class="chip-inspect" [attr.aria-label]="i18n.t('game.cardDetails') + ': ' + cardName(unit.cardId)" [title]="i18n.t('game.cardDetails')" (click)="inspectDeployedCard(unit.cardId, $event)">ⓘ</button></div>
                 } @else { <span class="empty">{{ i18n.t('game.enemyUnit') }}</span> }
                 @if (side(lane, opponentId()).building; as building) {
-                  <button class="building" [attr.data-building-uid]="building.uid" [style.--chip-accent]="chipAccent(building.cardId)" (click)="selectTarget(lane.index, $event)">
-                    <img class="thumb" [src]="artFor(building.cardId)" alt="" loading="lazy" (error)="hideArt($event)" />
+                  <div class="chip-shell"><button class="building" [attr.data-building-uid]="building.uid" [style.--chip-accent]="chipAccent(building.cardId)" (click)="selectTarget(lane.index, $event)">
+                    <img class="thumb" [src]="artFor(building.cardId)" [alt]="cardName(building.cardId)" loading="lazy" (error)="hideArt($event)" />
                     <span class="building-name">⌂ {{ cardName(building.cardId) }}</span>
                     <span class="tip">
                       <span class="tip-name">{{ cardName(building.cardId) }}</span>
-                      <span class="tip-meta">{{ getDef(building.cardId).kind }} · {{ getDef(building.cardId).faction }} · tier {{ getDef(building.cardId).tier }}</span>
+                      <span class="tip-meta">{{ i18n.cardKind(getDef(building.cardId).kind) }} · {{ i18n.faction(getDef(building.cardId).faction) }} · {{ i18n.tier(getDef(building.cardId).tier) }}</span>
                       <span class="tip-desc">{{ i18n.cardDescription(building.cardId, getDef(building.cardId).description) }}</span>
                     </span>
-                  </button>
+                  </button><button type="button" class="chip-inspect" [attr.aria-label]="i18n.t('game.cardDetails') + ': ' + cardName(building.cardId)" [title]="i18n.t('game.cardDetails')" (click)="inspectDeployedCard(building.cardId, $event)">ⓘ</button></div>
                 }
               </div>
               <div class="divider"></div>
               <div class="slot own">
                 @if (side(lane, g.selfPlayerId).unit; as unit) {
-                  <button class="unit" [attr.data-unit-uid]="unit.uid" [style.--chip-accent]="chipAccent(unit.cardId)" (click)="ownUnitClick(lane.index, $event)">
-                    <img class="thumb" [src]="artFor(unit.cardId)" alt="" loading="lazy" (error)="hideArt($event)" />
+                  <div class="chip-shell"><button class="unit" [attr.data-unit-uid]="unit.uid" [style.--chip-accent]="chipAccent(unit.cardId)" (click)="ownUnitClick(lane.index, $event)">
+                    <img class="thumb" [src]="artFor(unit.cardId)" [alt]="cardName(unit.cardId)" loading="lazy" (error)="hideArt($event)" />
                     <span class="chip-body">
-                    <b>{{ cardName(unit.cardId) }}</b><span>ATK {{ unit.effectiveAtk }} · HP {{ unit.health }}/{{ unit.maxHealth }}</span>
+                    <b>{{ cardName(unit.cardId) }}</b><span>{{ i18n.attackLabel(unit.effectiveAtk) }} · {{ i18n.healthLabel(unit.health, unit.maxHealth) }}</span>
                     @if (unit.dot || unit.stun || unit.turnsSurvived === 0 || willAttack(unit)) {
                       <span class="badges">
-                        @if (unit.dot) { <span class="dot-badge" title="Poisoned">☠ {{ unit.dot.turns }}</span> }
-                        @if (unit.stun) { <span class="stun-badge" [title]="'Stunned: skips its next ' + unit.stun.turns + ' attack(s)'">✦ {{ unit.stun.turns }}</span> }
-                        @if (unit.turnsSurvived === 0) { <span class="stagger-badge" title="Just arrived: attacks from your next turn">💤</span> }
+                        @if (unit.dot) { <span class="dot-badge" [title]="i18n.t('game.poisoned')">☠ {{ unit.dot.turns }}</span> }
+                        @if (unit.stun) { <span class="stun-badge" [title]="i18n.t('game.stunnedNext') + ' ' + unit.stun.turns">✦ {{ unit.stun.turns }}</span> }
+                        @if (unit.turnsSurvived === 0) { <span class="stagger-badge" [title]="i18n.t('game.justArrivedYou')">💤</span> }
                         @if (willAttack(unit)) { <span class="attack-badge" [title]="i18n.t('game.attacksNow')">⚔</span> }
                       </span>
                     }
@@ -147,27 +147,27 @@ import { SoundService } from './sound.service';
                     }
                     <span class="tip">
                       <span class="tip-name">{{ cardName(unit.cardId) }}</span>
-                      <span class="tip-meta">{{ getDef(unit.cardId).kind }} · {{ getDef(unit.cardId).faction }} · tier {{ getDef(unit.cardId).tier }}</span>
-                      <span class="tip-stats">ATK {{ unit.effectiveAtk }} · HP {{ unit.health }}/{{ unit.maxHealth }}</span>
-                      @if (unit.effectiveAtk > unit.attack) { <span class="tip-bonus">+{{ unit.effectiveAtk - unit.attack }} ATK from building/swarm bonuses.</span> }
-                      @if (unit.dot) { <span class="tip-poison">Poison: {{ unit.dot.amount }} damage at the start of your turn, {{ unit.dot.turns }} {{ unit.dot.turns === 1 ? 'turn' : 'turns' }} left.</span> }
-                      @if (unit.stun) { <span class="tip-stun">Stunned: skips its next {{ unit.stun.turns }} attack{{ unit.stun.turns === 1 ? '' : 's' }}.</span> }
-                      @if (unit.turnsSurvived === 0) { <span class="tip-stagger">Just arrived: attacks from your next turn.</span> }
+                      <span class="tip-meta">{{ i18n.cardKind(getDef(unit.cardId).kind) }} · {{ i18n.faction(getDef(unit.cardId).faction) }} · {{ i18n.tier(getDef(unit.cardId).tier) }}</span>
+                      <span class="tip-stats">{{ i18n.attackLabel(unit.effectiveAtk) }} · {{ i18n.healthLabel(unit.health, unit.maxHealth) }}</span>
+                      @if (unit.effectiveAtk > unit.attack) { <span class="tip-bonus">+{{ unit.effectiveAtk - unit.attack }} {{ i18n.t('game.attackBonus') }}</span> }
+                      @if (unit.dot) { <span class="tip-poison">{{ i18n.t('game.poison') }}: {{ unit.dot.amount }} {{ i18n.t('game.damageAtOwnerTurn') }}, {{ unit.dot.turns }}.</span> }
+                      @if (unit.stun) { <span class="tip-stun">{{ i18n.t('game.stunned') }}: {{ i18n.t('game.skipsNextAttacks') }} {{ unit.stun.turns }}.</span> }
+                      @if (unit.turnsSurvived === 0) { <span class="tip-stagger">{{ i18n.t('game.justArrivedYou') }}</span> }
                       <span class="tip-desc">{{ i18n.cardDescription(unit.cardId, getDef(unit.cardId).description) }}</span>
                     </span>
                     </span>
-                  </button>
+                  </button><button type="button" class="chip-inspect" [attr.aria-label]="i18n.t('game.cardDetails') + ': ' + cardName(unit.cardId)" [title]="i18n.t('game.cardDetails')" (click)="inspectDeployedCard(unit.cardId, $event)">ⓘ</button></div>
                 } @else { <span class="empty">{{ i18n.t('game.yourUnit') }}</span> }
                 @if (side(lane, g.selfPlayerId).building; as building) {
-                  <div class="building" tabindex="0" [attr.data-building-uid]="building.uid" [style.--chip-accent]="chipAccent(building.cardId)">
-                    <img class="thumb" [src]="artFor(building.cardId)" alt="" loading="lazy" (error)="hideArt($event)" />
+                  <div class="chip-shell"><div class="building" tabindex="0" [attr.data-building-uid]="building.uid" [style.--chip-accent]="chipAccent(building.cardId)">
+                    <img class="thumb" [src]="artFor(building.cardId)" [alt]="cardName(building.cardId)" loading="lazy" (error)="hideArt($event)" />
                     <span class="building-name">⌂ {{ cardName(building.cardId) }}</span>
                     <span class="tip">
                       <span class="tip-name">{{ cardName(building.cardId) }}</span>
-                      <span class="tip-meta">{{ getDef(building.cardId).kind }} · {{ getDef(building.cardId).faction }} · tier {{ getDef(building.cardId).tier }}</span>
+                      <span class="tip-meta">{{ i18n.cardKind(getDef(building.cardId).kind) }} · {{ i18n.faction(getDef(building.cardId).faction) }} · {{ i18n.tier(getDef(building.cardId).tier) }}</span>
                       <span class="tip-desc">{{ i18n.cardDescription(building.cardId, getDef(building.cardId).description) }}</span>
                     </span>
-                  </div>
+                  </div><button type="button" class="chip-inspect" [attr.aria-label]="i18n.t('game.cardDetails') + ': ' + cardName(building.cardId)" [title]="i18n.t('game.cardDetails')" (click)="inspectDeployedCard(building.cardId, $event)">ⓘ</button></div>
                 }
               </div>
             </article>
@@ -180,7 +180,7 @@ import { SoundService } from './sound.service';
           <div class="resource mana"><span>{{ i18n.t('game.mana') }}</span><strong>{{ self().mana }}/{{ self().maxMana }}</strong></div>
           <div class="resource cards"><span>{{ i18n.t('game.hand') }} / {{ i18n.t('game.deck') }}</span><strong>{{ self().handCount }} / {{ self().deckCount }}</strong></div>
           @if (self().fatigue > 0) {
-            <div class="fatigue" [title]="i18n.t('game.fatigueYou') + ' ' + self().fatigue + ' ' + i18n.t('game.fatigueTail')">☄ Fatigue {{ self().fatigue }}</div>
+            <div class="fatigue" [title]="i18n.t('game.fatigueYou') + ' ' + self().fatigue + ' ' + i18n.t('game.fatigueTail')">☄ {{ i18n.t('game.fatigue') }} {{ self().fatigue }}</div>
           }
         </section>
 
@@ -205,7 +205,7 @@ import { SoundService } from './sound.service';
         <section class="footer-grid">
           <div class="hint" aria-live="polite">
             @if (selectedCard()) {
-              <span class="hint-copy"><b>{{ getDef(selectedCard()!.cardId).name }}</b> — {{ selectionHint() }}</span>
+              <span class="hint-copy"><b>{{ cardName(selectedCard()!.cardId) }}</b> — {{ selectionHint() }}</span>
               <span class="hint-actions">
                 @if (canQuickPlay()) { <button class="primary quick-play" (click)="playSelectedInstant()">{{ i18n.t('game.useCard') }}</button> }
                 <button class="ghost small" (click)="cancelSelection()">{{ i18n.t('game.cancel') }}</button>
@@ -220,7 +220,9 @@ import { SoundService } from './sound.service';
           </div>
           <div class="log">
             <div class="log-head"><span>{{ i18n.t('game.log') }}</span><button class="ghost small" (click)="showFullLog.set(true)">{{ i18n.t('game.fullLog') }} ({{ g.log.length }})</button></div>
-            @for (entry of g.log.slice(-6).reverse(); track entry.seq) { <div>{{ entry.text }}</div> }
+            @for (entry of g.log.slice(-6).reverse(); track entry.seq) {
+              <div class="log-entry"><span>{{ localizedLogText(entry) }}</span>@for (cardId of entry.cardIds ?? []; track cardId) { <button type="button" class="log-card" (click)="openCardDetails(cardId)">{{ cardName(cardId) }}</button> }</div>
+            }
           </div>
         </section>
 
@@ -230,23 +232,23 @@ import { SoundService } from './sound.service';
               class="card-detail"
               role="dialog"
               aria-modal="true"
-              [attr.aria-label]="i18n.t('game.cardDetails') + ': ' + card.name"
+              [attr.aria-label]="i18n.t('game.cardDetails') + ': ' + i18n.cardName(card.id, card.name)"
               [style.--detail-accent]="laneAccent(card.faction)"
               (click)="$event.stopPropagation()"
             >
               <button class="detail-close" type="button" [attr.aria-label]="i18n.t('game.close')" (click)="closeCardDetails()">×</button>
               <div class="detail-art-frame">
-                <img [src]="artFor(card.id)" [alt]="card.name" (error)="hideArt($event)" />
+                <img [src]="artFor(card.id)" [alt]="i18n.cardName(card.id, card.name)" (error)="hideArt($event)" />
                 <span class="detail-cost">{{ card.cost }}</span>
               </div>
               <div class="detail-copy">
                 <div class="eyebrow">{{ i18n.t('game.cardDetails') }}</div>
-                <h2>{{ card.name }}</h2>
+                <h2>{{ i18n.cardName(card.id, card.name) }}</h2>
                 <div class="detail-tags">
-                  <span>{{ card.kind }}</span><span>{{ i18n.faction(card.faction) }}</span><span>tier {{ card.tier }}</span>
+                  <span>{{ i18n.cardKind(card.kind) }}</span><span>{{ i18n.faction(card.faction) }}</span><span>{{ i18n.tier(card.tier) }}</span>
                 </div>
                 @if (card.kind === 'unit') {
-                  <div class="detail-stats"><span><b>{{ card.attack }}</b> ATK</span><span><b>{{ card.health }}</b> HP</span></div>
+                  <div class="detail-stats"><span><b>{{ card.attack }}</b> {{ i18n.t('game.atk') }}</span><span><b>{{ card.health }}</b> {{ i18n.t('game.hpShort') }}</span></div>
                 }
               <p class="detail-description">{{ i18n.cardDescription(card.id, card.description) }}</p>
                 @if (card.kind === 'power') {
@@ -259,14 +261,14 @@ import { SoundService } from './sound.service';
                   <div class="detail-rule"><b>{{ i18n.t('game.onPlay') }}:</b> {{ targetLabel(card.onPlay.target) }}</div>
                 }
                 @if (card.kind === 'unit' && card.swarm) {
-                  <div class="detail-rule"><b>{{ i18n.t('game.swarm') }}:</b> +{{ card.swarm }} ATK {{ i18n.t('game.perAlly') }}</div>
+                  <div class="detail-rule"><b>{{ i18n.t('game.swarm') }}:</b> +{{ card.swarm }} {{ i18n.t('game.atk') }} {{ i18n.t('game.perAlly') }}</div>
                 }
                 @if (card.kind === 'unit' && card.drawOnKill) {
                   <div class="detail-rule"><b>{{ i18n.t('game.onKill') }}:</b> {{ i18n.t('game.drawCards') }} {{ card.drawOnKill }}</div>
                 }
                 @if (card.kind === 'unit' && card.special; as special) {
                   <div class="detail-special">
-                    <div><span>⚡ {{ i18n.t('game.special') }}</span><strong>{{ special.name }}</strong></div>
+                    <div><span>⚡ {{ i18n.t('game.special') }}</span><strong>{{ i18n.specialName(card.id, special.name) }}</strong></div>
                     <div class="detail-tags"><span>{{ special.cost }} {{ i18n.t('game.manaShort') }}</span><span>{{ special.uses }} {{ i18n.t('game.uses') }}</span><span>{{ targetLabel(special.target) }}</span></div>
                     <p>{{ i18n.specialDescription(card.id, special.description) }}</p>
                   </div>
@@ -283,7 +285,9 @@ import { SoundService } from './sound.service';
               <div class="eyebrow">{{ i18n.t('game.fullLogTitle') }}</div>
               <h2>{{ i18n.t('game.logTitle') }}</h2>
               <div class="full-log">
-                @for (entry of g.log; track entry.seq) { <div><span class="seq">#{{ entry.seq }}</span> {{ entry.text }}</div> }
+                @for (entry of g.log; track entry.seq) {
+                  <div class="log-entry"><span><span class="seq">#{{ entry.seq }}</span> {{ localizedLogText(entry) }}</span>@for (cardId of entry.cardIds ?? []; track cardId) { <button type="button" class="log-card" (click)="openCardDetails(cardId)">{{ cardName(cardId) }}</button> }</div>
+                }
                 @empty { <div>{{ i18n.t('game.noEntries') }}</div> }
               </div>
               <div class="modal-actions">
@@ -352,7 +356,7 @@ import { SoundService } from './sound.service';
     .lane { background:radial-gradient(circle at 50% 45%,var(--lane-glow,transparent),transparent 58%),linear-gradient(#151b25,#0d1118); border:1px solid var(--lane-accent,#2d3441); border-color:color-mix(in srgb,var(--lane-accent,#2d3441) 68%,#2d3441); box-shadow:0 0 16px -5px var(--lane-glow,transparent),inset 0 1px #ffffff08; border-radius:13px; padding:8px; display:grid; grid-template-rows:auto minmax(0,1fr) 1px minmax(0,1fr); gap:6px; min-width:0; position:relative; transition:opacity .18s,border-color .18s,box-shadow .18s,transform .18s; }
     .lane.targetable{cursor:crosshair;border-color:#e4c674;box-shadow:0 0 0 2px #d7b76c35,0 0 24px #d7b76c26,inset 0 1px #fff2}.lane.targetable:hover{transform:translateY(-2px);box-shadow:0 0 0 2px #d7b76c66,0 10px 28px #0008}.lane.targetable::after{content:'+';position:absolute;right:8px;bottom:8px;width:22px;height:22px;display:grid;place-items:center;border-radius:50%;background:#d7b76c;color:#17130b;font-weight:900;box-shadow:0 4px 12px #0008}.lane.blocked{opacity:.48;filter:saturate(.7)}
     .lane-name{text-transform:uppercase;letter-spacing:.1em;font-size:10px;font-weight:900;color:var(--lane-accent,#d7b76c);display:flex;justify-content:space-between;align-items:center;gap:5px;min-height:24px}.lane-name span{color:#687183}.lane-name .vs{color:#687183}.lane-name .side{text-transform:uppercase;letter-spacing:.07em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-    .slot{display:grid;align-content:center;gap:5px;min-height:0}.divider{background:linear-gradient(90deg,transparent,#465063,transparent);position:relative}.divider::after{content:'VS';position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);font-size:8px;line-height:14px;padding:0 5px;border-radius:999px;color:#646f82;background:#111720}.empty{display:grid;place-items:center;height:100%;min-height:54px;border:1px dashed #313b4b;border-radius:9px;color:#566176;font-size:9px;text-transform:uppercase;letter-spacing:.11em;background:#080b101f}
+    .slot{display:grid;align-content:center;gap:5px;min-height:0;position:relative}.divider{background:linear-gradient(90deg,transparent,#465063,transparent);position:relative}.divider::after{content:'VS';position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);font-size:8px;line-height:14px;padding:0 5px;border-radius:999px;color:#646f82;background:#111720}.empty{display:grid;place-items:center;height:100%;min-height:54px;border:1px dashed #313b4b;border-radius:9px;color:#566176;font-size:9px;text-transform:uppercase;letter-spacing:.11em;background:#080b101f}
     /* --chip-accent is set per chip from getCard(cardId).faction; the inset shadow
        (not a wider border) tints the left edge with zero layout shift. */
     .unit,.building{width:100%;position:relative;border:1px solid #3c4554;background:linear-gradient(135deg,#222a37,#181e28);color:#fff;border-radius:10px;padding:8px;text-align:left;box-shadow:inset 3px 0 0 0 var(--chip-accent,transparent),0 6px 14px #0004}
@@ -365,6 +369,7 @@ import { SoundService } from './sound.service';
     .chip-body>small{color:#8f98a9;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.chip-body>small.ready{color:#f0ce70;font-weight:800;text-shadow:0 0 12px #d7b76c55}
     .building{display:grid;grid-template-columns:48px minmax(0,1fr);gap:7px;align-items:center;font-size:10px;background:linear-gradient(135deg,#292418,#1c1912);border-color:#50462e;color:#e7d49e}
     .building-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .chip-shell{position:relative;display:block;min-width:0;width:100%}.chip-inspect{position:absolute;right:6px;top:6px;z-index:6;width:24px;height:24px;padding:0;display:grid;place-items:center;border:1px solid #ffffff55;border-radius:50%;background:#0b1018dd;color:#fff;font-size:13px;font-weight:900;cursor:pointer;box-shadow:0 3px 8px #0008}.chip-inspect:hover{background:#e5c66f;color:#19150c}.chip-inspect:focus-visible{outline:2px solid #8bd2ff;outline-offset:2px}
     /* Board art: fixed square thumbs with a frame, served from /cards/<id>.png
        (same-faction stand-in while a card has no own art). A missing file hides
        the img via hideArt, leaving the text. */
@@ -415,7 +420,7 @@ import { SoundService } from './sound.service';
     .hand-zone{display:grid;grid-template-rows:auto minmax(0,1fr);min-height:0;border:1px solid #252e3b;border-radius:13px;background:linear-gradient(#10151d,#0d1117);overflow:hidden}.hand-head{display:flex;justify-content:space-between;align-items:center;padding:7px 10px 5px;color:#d7b76c;text-transform:uppercase;font-size:9px;letter-spacing:.12em;font-weight:900}.hand-head span:last-child{color:#778195;letter-spacing:.04em;text-transform:none}
     .hand { display:flex; gap:8px; overflow-x:auto; overflow-y:hidden; padding:3px 8px 9px; min-height:0; align-items:stretch; scroll-snap-type:x proximity; scrollbar-gutter:stable; }
     .footer-grid{display:grid;grid-template-columns:minmax(280px,.8fr) minmax(0,1.2fr);gap:8px;min-height:0}.hint,.log{background:linear-gradient(135deg,#121823,#0f141c);border:1px solid #293241;border-radius:11px;padding:9px 11px;font-size:11px;color:#aeb6c5;min-height:0;overflow:auto}.hint{display:flex;align-items:center;justify-content:space-between;gap:10px;border-left:3px solid #d7b76c}.hint-copy{line-height:1.4}.hint-actions{display:flex;align-items:center;gap:6px;flex:0 0 auto}.quick-play{padding:6px 10px!important;font-size:10px}.log{display:grid;gap:3px;align-content:start}.log>div:not(.log-head){min-height:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.error{margin-top:5px;color:#ff9da5}
-    .log-head{display:flex;align-items:center;justify-content:space-between;gap:8px;color:#d7b76c;text-transform:uppercase;letter-spacing:.1em;font-size:10px;font-weight:800}
+    .log-head{display:flex;align-items:center;justify-content:space-between;gap:8px;color:#d7b76c;text-transform:uppercase;letter-spacing:.1em;font-size:10px;font-weight:800}.log-entry{display:flex;align-items:center;gap:5px;min-width:0}.log-entry>span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.log-card{flex:0 0 auto;padding:2px 6px;border:1px solid #5d5133;border-radius:5px;background:#241f12;color:#e7d49e;font-size:10px;cursor:pointer}.log-card:hover,.log-card:focus-visible{background:#d7b76c;color:#17130b;outline:none}
     .ghost.small{background:transparent;color:#aeb6c5;border:1px solid #3e4655;padding:4px 10px;border-radius:7px;font-size:11px}
     /* Full-log modal: the list scrolls inside the modal, never the page. */
     .log-modal{min-width:min(560px,92vw);text-align:left}
@@ -621,7 +626,10 @@ export class GameComponent {
   }
 
   getDef = getCard;
-  cardName(cardId: string) { return getCard(cardId).name; }
+  cardName(cardId: string) {
+    const def = getCard(cardId);
+    return this.i18n.cardName(cardId, def.name);
+  }
   /** This viewer's OWN side type of a lane (frame accent + name). */
   ownSideType(lane: ClientLaneState) { return lane.sideTypes[this.game()!.selfPlayerId]; }
   /** The opponent's side type of a lane (shown when the sides differ). */
@@ -637,12 +645,33 @@ export class GameComponent {
   chipAccent(cardId: string) { return FACTION_THEME[getCard(cardId).faction].accent; }
   specialLabel(cardId: string) {
     const card = getCard(cardId);
-    return card.kind === 'unit' ? card.special?.name ?? null : null;
+    return card.kind === 'unit' && card.special ? this.i18n.specialName(cardId, card.special.name) : null;
   }
   side(lane: ClientLaneState, playerId: PlayerId) { return lane.sides[playerId]; }
 
   openCardDetails(cardId: string): void {
+    this.showFullLog.set(false);
     this.inspectedCard.set(getCard(cardId));
+  }
+
+  /** Explicitly inspect a deployed card without entering target/special mode. */
+  inspectDeployedCard(cardId: string, event: Event): void {
+    event.stopPropagation();
+    this.openCardDetails(cardId);
+  }
+
+  /** Translate only identities explicitly attached to a log entry. */
+  localizedLogText(entry: GameLogEntry): string {
+    if (!this.i18n.isRu() || !entry.cardIds?.length) return entry.text;
+    let text = entry.text;
+    for (const cardId of [...new Set(entry.cardIds)]) {
+      const def = getCard(cardId);
+      text = text.split(def.name).join(this.i18n.cardName(cardId, def.name));
+      if (def.kind === 'unit' && def.special) {
+        text = text.split(def.special.name).join(this.i18n.specialName(cardId, def.special.name));
+      }
+    }
+    return text;
   }
 
   closeCardDetails(): void {

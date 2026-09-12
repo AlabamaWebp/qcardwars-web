@@ -236,6 +236,8 @@ export interface PlayerState {
 export interface GameLogEntry {
   seq: number;
   text: string;
+  /** Public card identities explicitly mentioned by this entry. */
+  cardIds?: string[];
 }
 
 /**

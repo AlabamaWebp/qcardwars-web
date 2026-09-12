@@ -90,6 +90,7 @@ describe('game-core baseline', () => {
       laneIndex: 1,
     });
     expect(state.players.p1.mana).toBe(8);
+    expect(state.log.find((entry) => /Alice plays Metrocop/.test(entry.text))?.cardIds).toEqual(['combine-metrocop']);
     const hpBefore = state.players.p2.hp;
     // GA-1a stagger: a freshly-played unit arrives but does not attack yet.
     state = applyAction(state, {
@@ -111,6 +112,11 @@ describe('game-core baseline', () => {
     });
     expect(state.players.p2.hp).toBe(hpBefore - 2);
     expect(state.activePlayerId).toBe('p2');
+  });
+
+  it('attaches card metadata only to public card log identities', () => {
+    const state = game();
+    expect(state.log.find((entry) => /starts turn/.test(entry.text))?.cardIds).toBeUndefined();
   });
 
   it('requires a special unit to survive a turn before activation', () => {
@@ -615,6 +621,7 @@ describe('new catalog content', () => {
     expect(result.lanes[2].sides.p1.unit!.specialUsesRemaining).toBe(usesBefore - 1);
     expect(result.players.p1.hand.length).toBe(handBefore + 1);
     expect(result.log.some((e) => /activates\s+Morale/i.test(e.text))).toBe(true);
+    expect(result.log.find((e) => /activates\s+Morale/i.test(e.text))?.cardIds).toEqual(['rebel-commander']);
   });
 
   it('combine-laser "Targeting Laser" (buff-unit health:0) raises attack only', () => {

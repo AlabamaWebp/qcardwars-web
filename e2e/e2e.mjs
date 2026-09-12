@@ -413,6 +413,16 @@ async function specSoloAi(browser) {
   if (!laneNames.some((n) => n.startsWith('wraith'))) fail(`expected a wraith lane on the board, saw: ${laneNames.join(', ')}`);
   if (laneNames.some((n) => n.startsWith('antlion'))) fail(`antlion lane should have been swapped out: ${laneNames.join(', ')}`);
 
+  // RU smoke: card identities and structural fields come from I18nService,
+  // while game-core keeps canonical English definitions unchanged.
+  await page.click('qcw-game button.lang');
+  await page.waitForFunction(() => (document.querySelector('qcw-card .kind')?.textContent ?? '').match(/юнит|здание|сила/i));
+  const ruCardMeta = await page.$eval('qcw-card .kind', (node) => node.textContent ?? '');
+  const ruCardSubmeta = await page.$eval('qcw-card small', (node) => node.textContent ?? '');
+  if (!/юнит|здание|сила/i.test(ruCardMeta) || !/уровень/i.test(ruCardSubmeta)) {
+    fail(`RU card metadata missing: kind="${ruCardMeta}", submeta="${ruCardSubmeta}"`);
+  }
+
   // Every hand card, including disabled ones, has a non-gameplay details
   // action. Opening it must not select/play the card, and Escape closes it.
   await waitSel(page, 'qcw-card .inspect');
@@ -425,6 +435,54 @@ async function specSoloAi(browser) {
   if (await page.$('qcw-card .card.selected')) fail('inspecting a card selected it for play');
   await page.keyboard.press('Escape');
   await page.waitForSelector('qcw-game .card-detail', { hidden: true, timeout: 5000 });
+
+  // Every deployed piece has an independent inspect anchor. This catches the
+  // unit+building overlap regression and verifies the same modal path works
+  // for a public board card.
+  await page.waitForSelector('qcw-game .board .chip-inspect', { timeout: 15000 });
+  await page.click('qcw-game .board .chip-inspect');
+  await waitSel(page, 'qcw-game .card-detail[role="dialog"]');
+  const deployedDetail = await textOf(page, 'qcw-game .card-detail');
+  if (!/юнит|здание|сила/i.test(deployedDetail) || !/уровень/i.test(deployedDetail)) {
+    fail(`RU deployed card details missing localized fields: "${deployedDetail.trim()}"`);
+  }
+  await page.keyboard.press('Escape');
+  await page.waitForSelector('qcw-game .card-detail', { hidden: true, timeout: 5000 });
+
+  // The structured card metadata on a public play log entry is rendered as a
+  // localized button; clicking it must open the same details dialog.
+  await page.waitForSelector('qcw-game .log-card', { timeout: 15000 });
+  await page.click('qcw-game .log-card');
+  await waitSel(page, 'qcw-game .card-detail[role="dialog"]');
+  const playedLogDetail = await textOf(page, 'qcw-game .card-detail');
+  if (!/юнит|здание|сила/i.test(playedLogDetail) || !/уровень/i.test(playedLogDetail)) {
+    fail(`RU played-card log details missing localized fields: "${playedLogDetail.trim()}"`);
+  }
+  await page.keyboard.press('Escape');
+  await page.waitForSelector('qcw-game .card-detail', { hidden: true, timeout: 5000 });
+
+  // At least one unit with a special should be present in the opening hand;
+  // inspect actions are non-gameplay, so iterate safely until its detail block
+  // appears and assert that the special name is localized as well.
+  const handInspects = await page.$$('qcw-card .inspect');
+  let specialSeen = false;
+  for (const inspect of handInspects) {
+    await inspect.click();
+    await waitSel(page, 'qcw-game .card-detail[role="dialog"]');
+    const special = await page.$('qcw-game .detail-special strong');
+    if (special) {
+      const specialText = await special.evaluate((node) => node.textContent ?? '');
+      if (!/[А-Яа-яЁё]/.test(specialText)) fail(`special name was not localized in RU: "${specialText}"`);
+      specialSeen = true;
+      await page.keyboard.press('Escape');
+      await page.waitForSelector('qcw-game .card-detail', { hidden: true, timeout: 5000 });
+      break;
+    }
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('qcw-game .card-detail', { hidden: true, timeout: 5000 });
+  }
+  // The opening hand is seeded by the server and may contain no special-unit
+  // card in a short smoke match; when present, the branch above asserts it.
 
   // Hand the AI the turn (if it is ours), then observe for AI activity with
   // zero further human input.

@@ -12,22 +12,22 @@ import { I18nService } from './i18n.service';
       <button class="card" [class.selected]="selected()" [disabled]="disabled()" [attr.aria-pressed]="selected()" [title]="i18n.cardDescription(def().id, def().description)" (click)="picked.emit(card())">
         <span class="cost">{{ def().cost }}</span>
         <span class="art-frame">
-          <img class="art" [src]="art()" alt="" loading="lazy" (error)="artFailed.set(true)" [class.hidden]="artFailed()" />
-          <span class="art-name">{{ def().name }}</span>
-        </span>
-        <div class="kind">{{ def().kind }}</div>
-        <small>{{ def().faction }} · tier {{ def().tier }}</small>
+          <img class="art" [src]="art()" [alt]="i18n.cardName(def().id, def().name)" loading="lazy" (error)="artFailed.set(true)" [class.hidden]="artFailed()" />
+        <span class="art-name">{{ i18n.cardName(def().id, def().name) }}</span>
+      </span>
+        <div class="kind">{{ i18n.cardKind(def().kind) }}</div>
+        <small>{{ i18n.faction(def().faction) }} · {{ i18n.tier(def().tier) }}</small>
         @if (def().kind === 'unit') {
-          <div class="stats"><span>ATK {{ unitAtk }}</span><span>HP {{ unitHp }}</span></div>
+          <div class="stats"><span>{{ i18n.attackLabel(unitAtk) }}</span><span>{{ i18n.healthLabel(unitHp) }}</span></div>
         }
         <p>{{ i18n.cardDescription(def().id, def().description) }}</p>
       </button>
       <button
         type="button"
         class="inspect"
-        [attr.aria-label]="i18n.t('game.cardDetails') + ': ' + def().name"
+        [attr.aria-label]="i18n.t('game.cardDetails') + ': ' + i18n.cardName(def().id, def().name)"
         [title]="i18n.t('game.cardDetails')"
-        (click)="inspect.emit(card())"
+        (click)="$event.stopPropagation(); inspect.emit(card())"
       >ⓘ</button>
     </div>
   `,

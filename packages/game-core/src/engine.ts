@@ -50,8 +50,9 @@ function uid(state: GameState, prefix: string): string {
   return value;
 }
 
-function addLog(state: GameState, text: string): void {
-  state.log.push({ seq: state.log.length ? state.log[state.log.length - 1].seq + 1 : 1, text });
+function addLog(state: GameState, text: string, cardIds?: readonly string[]): void {
+  const publicCardIds = cardIds?.length ? [...new Set(cardIds)] : undefined;
+  state.log.push({ seq: state.log.length ? state.log[state.log.length - 1].seq + 1 : 1, text, ...(publicCardIds ? { cardIds: publicCardIds } : {}) });
   // Full-log support: keep a long retained history (the footer shows the last
   // 6, the "Full log" modal shows everything retained here).
   if (state.log.length > 500) state.log.splice(0, state.log.length - 500);
@@ -131,11 +132,11 @@ function startTurn(state: GameState, playerId: PlayerId): void {
       // Dots can only come from the opponent, so the tick credits them.
       state.stats[otherPlayerId(state, playerId)].damageDealt += side.unit.dot.amount;
       side.unit.health -= side.unit.dot.amount;
-      addLog(state, `${getCard(side.unit.cardId).name} suffers ${side.unit.dot.amount} dot damage in lane ${lane.index + 1}.`);
+      addLog(state, `${getCard(side.unit.cardId).name} suffers ${side.unit.dot.amount} dot damage in lane ${lane.index + 1}.`, [side.unit.cardId]);
       if (side.unit.dot.turns <= 1) side.unit.dot = undefined;
       else side.unit.dot.turns -= 1;
       if (side.unit.health <= 0) {
-        addLog(state, `${getCard(side.unit.cardId).name} is destroyed in lane ${lane.index + 1}.`);
+        addLog(state, `${getCard(side.unit.cardId).name} is destroyed in lane ${lane.index + 1}.`, [side.unit.cardId]);
         state.stats[otherPlayerId(state, playerId)].unitsDestroyed += 1;
         side.unit = null;
       }
@@ -205,7 +206,7 @@ function maybeFinish(state: GameState, damagedPlayerId: PlayerId): void {
 function removeDeadUnit(state: GameState, lane: LaneState, ownerId: PlayerId): void {
   const unit = lane.sides[ownerId].unit;
   if (unit && unit.health <= 0) {
-    addLog(state, `${getCard(unit.cardId).name} is destroyed in lane ${lane.index + 1}.`);
+    addLog(state, `${getCard(unit.cardId).name} is destroyed in lane ${lane.index + 1}.`, [unit.cardId]);
     // In 1v1 every unit death results from the opponent (combat, effects, dots),
     // so the kill is credited to the dead unit's opponent.
     state.stats[otherPlayerId(state, ownerId)].unitsDestroyed += 1;
@@ -283,14 +284,14 @@ function applyEffects(
         const target = targetUnit(state, actorId, resolvedTarget, sourceLaneIndex, targetLaneIndex);
         target.unit.attack = Math.max(0, target.unit.attack - effect.attack);
         target.unit.health -= effect.health;
-        addLog(state, `${getCard(target.unit.cardId).name} loses ${effect.attack} ATK and ${effect.health} HP in lane ${target.lane.index + 1}.`);
+        addLog(state, `${getCard(target.unit.cardId).name} loses ${effect.attack} ATK and ${effect.health} HP in lane ${target.lane.index + 1}.`, [target.unit.cardId]);
         if (target.ownerId === actorId) {
           // Friendly self-hit (unreachable with the current catalog — every
           // debuff is enemy-unit — but guarded for future cards): not "damage
           // dealt" and not an opponent kill; a self-destruction credits nobody
           // (same convention as the AOE self-hit branch).
           if (target.unit.health <= 0) {
-            addLog(state, `${getCard(target.unit.cardId).name} is destroyed in lane ${target.lane.index + 1}.`);
+            addLog(state, `${getCard(target.unit.cardId).name} is destroyed in lane ${target.lane.index + 1}.`, [target.unit.cardId]);
             target.lane.sides[actorId].unit = null;
           }
         } else {
@@ -308,7 +309,7 @@ function applyEffects(
         const target = targetUnit(state, actorId, resolvedTarget, sourceLaneIndex, targetLaneIndex);
         // One dot slot per unit: assigning here replaces any existing dot.
         target.unit.dot = { amount: effect.amount, turns: effect.turns };
-        addLog(state, `${getCard(target.unit.cardId).name} is poisoned: ${effect.amount} damage for ${effect.turns} turns.`);
+        addLog(state, `${getCard(target.unit.cardId).name} is poisoned: ${effect.amount} damage for ${effect.turns} turns.`, [target.unit.cardId]);
         break;
       }
       case 'aoe': {
@@ -326,7 +327,7 @@ function applyEffects(
             // Self-hit: the actor's own AOE taking out the actor's OWN unit is
             // not "damage dealt" and is not an opponent kill, so the death is
             // credited to NOBODY (neither the actor nor the opponent).
-            addLog(state, `${getCard(unit.cardId).name} is destroyed in lane ${lane.index + 1}.`);
+            addLog(state, `${getCard(unit.cardId).name} is destroyed in lane ${lane.index + 1}.`, [unit.cardId]);
             lane.sides[actorId].unit = null;
           }
         }
@@ -338,10 +339,10 @@ function applyEffects(
         if (!added) fail('UNKNOWN_CARD', `Unknown card id in effect: ${effect.cardId}.`);
         const player = state.players[actorId];
         if (player.hand.length >= state.config.handCap) {
-          addLog(state, `${player.name}'s hand is full; ${added.name} was not added.`);
+          addLog(state, `${player.name}'s hand is full; ${added.name} was not added.`, [added.id]);
         } else {
           player.hand.push({ uid: uid(state, 'card'), cardId: added.id });
-          addLog(state, `${player.name} adds ${added.name} to their hand.`);
+          addLog(state, `${player.name} adds ${added.name} to their hand.`, [added.id]);
         }
         break;
       }
@@ -397,7 +398,7 @@ function applyEffects(
         const target = targetUnit(state, actorId, resolvedTarget, sourceLaneIndex, targetLaneIndex);
         // One stun slot per unit: assigning here replaces any existing stun.
         target.unit.stun = { turns: effect.turns };
-        addLog(state, `${getCard(target.unit.cardId).name} is stunned for ${effect.turns} turn(s) in lane ${target.lane.index + 1}.`);
+        addLog(state, `${getCard(target.unit.cardId).name} is stunned for ${effect.turns} turn(s) in lane ${target.lane.index + 1}.`, [target.unit.cardId]);
         break;
       }
       case 'bounce-unit': {
@@ -414,10 +415,10 @@ function applyEffects(
         const returned: HandCard = { uid: uid(state, 'card'), cardId: target.unit.cardId };
         if (owner.hand.length >= state.config.handCap) {
           owner.discard.push(returned);
-          addLog(state, `${card.name} is bounced, but ${owner.name}'s hand is full — it is discarded (buffs lost).`);
+          addLog(state, `${card.name} is bounced, but ${owner.name}'s hand is full — it is discarded (buffs lost).`, [card.id]);
         } else {
           owner.hand.push(returned);
-          addLog(state, `${card.name} is returned to ${owner.name}'s hand (buffs lost).`);
+          addLog(state, `${card.name} is returned to ${owner.name}'s hand (buffs lost).`, [card.id]);
         }
         break;
       }
@@ -437,7 +438,9 @@ function applyEffects(
           const index = victim.hand.findIndex((c) => c.uid === discarded.uid);
           victim.hand.splice(index, 1);
           victim.discard.push(discarded);
-          addLog(state, `${victim.name} discards ${getCard(discarded.cardId).name} at random.`);
+          // Opponent hand identity is hidden by the visibility contract; keep
+          // random discard metadata-less and do not reveal the card name.
+          addLog(state, `${victim.name} discards a random card.`);
         }
         break;
       }
@@ -485,7 +488,7 @@ function playUnit(
   };
   if (card.onPlay) {
     applyEffects(state, playerId, card.onPlay.effects, card.onPlay.target, lane.index, lane.index);
-    addLog(state, `${card.name} triggers its on-play effect.`);
+    addLog(state, `${card.name} triggers its on-play effect.`, [card.id]);
   }
 }
 
@@ -556,7 +559,7 @@ function handlePlayCard(state: GameState, action: Extract<GameAction, { type: 'p
   player.hand.splice(handIndex, 1);
   player.discard.push(handCard);
   state.stats[action.playerId].cardsPlayed += 1;
-  addLog(state, `${player.name} plays ${card.name}.`);
+  addLog(state, `${player.name} plays ${card.name}.`, [card.id]);
 }
 
 function handleSpecial(state: GameState, action: Extract<GameAction, { type: 'activate-special' }>): void {
@@ -591,11 +594,11 @@ function handleSpecial(state: GameState, action: Extract<GameAction, { type: 'ac
     action.laneIndex,
     action.targetLaneIndex,
   );
-  addLog(state, `${player.name} activates ${card.special.name}.`);
+  addLog(state, `${player.name} activates ${card.special.name}.`, [card.id]);
 
   if (card.special.destroySelfAfter && lane.sides[action.playerId].unit?.uid === unit.uid) {
     lane.sides[action.playerId].unit = null;
-    addLog(state, `${card.name} sacrifices itself.`);
+    addLog(state, `${card.name} sacrifices itself.`, [card.id]);
   }
 }
 
@@ -635,14 +638,14 @@ function resolveCombat(state: GameState, attackerId: PlayerId): void {
     // lane but does not attack until its owner's NEXT turn. It still blocks
     // damage as a defender on this turn.
     if (attacker.turnsSurvived === 0) {
-      addLog(state, `${getCard(attacker.cardId).name} arrives in lane ${lane.index + 1} and will attack from next turn.`);
+      addLog(state, `${getCard(attacker.cardId).name} arrives in lane ${lane.index + 1} and will attack from next turn.`, [attacker.cardId]);
       continue;
     }
     // GA-2a stun: a stunned READY unit skips the attack it would make and the
     // slot ticks down. A staggered unit (handled above) keeps its slot because
     // it had no attack to skip.
     if (attacker.stun) {
-      addLog(state, `${getCard(attacker.cardId).name} is stunned and skips its attack in lane ${lane.index + 1}.`);
+      addLog(state, `${getCard(attacker.cardId).name} is stunned and skips its attack in lane ${lane.index + 1}.`, [attacker.cardId]);
       if (attacker.stun.turns <= 1) attacker.stun = undefined;
       else attacker.stun.turns -= 1;
       continue;
@@ -652,7 +655,7 @@ function resolveCombat(state: GameState, attackerId: PlayerId): void {
     const defender = lane.sides[defenderId].unit;
     if (defender) {
       defender.health -= damage;
-      addLog(state, `${getCard(attacker.cardId).name} deals ${damage} to ${getCard(defender.cardId).name}.`);
+      addLog(state, `${getCard(attacker.cardId).name} deals ${damage} to ${getCard(defender.cardId).name}.`, [attacker.cardId, defender.cardId]);
       const killed = defender.health <= 0;
       removeDeadUnit(state, lane, defenderId);
       // GA-3b trades pay: a combat kill of an enemy UNIT (never a hero, never
@@ -660,11 +663,11 @@ function resolveCombat(state: GameState, attackerId: PlayerId): void {
       const attackerCard = getCard(attacker.cardId);
       if (killed && attackerCard.kind === 'unit' && attackerCard.drawOnKill) {
         for (let i = 0; i < attackerCard.drawOnKill; i += 1) drawOne(state, state.players[attackerId]);
-        addLog(state, `${attackerCard.name} draws ${attackerCard.drawOnKill} card(s) from the kill.`);
+        addLog(state, `${attackerCard.name} draws ${attackerCard.drawOnKill} card(s) from the kill.`, [attackerCard.id]);
       }
     } else {
       state.players[defenderId].hp -= damage;
-      addLog(state, `${getCard(attacker.cardId).name} deals ${damage} direct damage.`);
+      addLog(state, `${getCard(attacker.cardId).name} deals ${damage} direct damage.`, [attacker.cardId]);
       maybeFinish(state, defenderId);
     }
   }
