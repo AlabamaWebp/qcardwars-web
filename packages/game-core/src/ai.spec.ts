@@ -130,7 +130,7 @@ describe('Phase D D-1: chooseAiAction', () => {
     expect(next.players.p2.mana).toBe(3); // spent 1, gained 2
   });
 
-  it('targets an enemy unit with a targeted special (own lane first)', () => {
+  it('targets the best enemy unit with a targeted special', () => {
     let state = aiTurn(game());
     state.players.p2.hand = []; // hermetic: ignore the initial draw
     state.players.p2.mana = 2;
@@ -284,6 +284,85 @@ describe('M4: heuristic lane and target selection', () => {
     if (action?.type === 'play-card') {
       expect(action.laneIndex).toBe(0);
     }
+  });
+
+  it('does not waste a stun on an already-stunned enemy (plays a cheaper card instead)', () => {
+    let state = aiTurn(game());
+    state.players.p2.hand = [];
+    state = structuredClone(state);
+    placeUnit(state, 0, 'p1', 'bucket', 1);
+    state.lanes[0].sides.p1.unit!.stun = { turns: 1 }; // already stunned
+    const stasis = giveCard(state, 'p2', 'power-stasis-field'); // cost 2 — would be a waste
+    state = stasis.state;
+    const bucket = giveCard(state, 'p2', 'bucket'); // cost 1 fallback
+    state = bucket.state;
+
+    const action = chooseAiAction(state, 'p2');
+    expect(action?.type).toBe('play-card');
+    if (action?.type === 'play-card') {
+      expect(action.handCardUid).toBe(bucket.uid); // stasis vetoed, not played
+      // Lane 0 is outmatched (stunned 2/4 beats the 1/2 bucket), so it goes to lane 1.
+      expect(action.laneIndex).toBe(1);
+    }
+  });
+
+  it('aims a lane AOE power at the lane with the most enemy value', () => {
+    let state = aiTurn(game());
+    state.players.p2.hand = [];
+    state = structuredClone(state);
+    placeCustomUnit(state, 0, 'p1', 2, 4); // value 6
+    placeCustomUnit(state, 2, 'p1', 5, 3); // value 8 — better target
+    const scorch = giveCard(state, 'p2', 'power-scorch'); // cost 3, target 'lane'
+    state = scorch.state;
+
+    const action = chooseAiAction(state, 'p2');
+    expect(action).toEqual({
+      type: 'play-card',
+      playerId: 'p2',
+      expectedRevision: state.revision,
+      handCardUid: scorch.uid,
+      laneIndex: 2,
+      targetLaneIndex: 2,
+    });
+  });
+
+  it('destroys the enemy building in the lowest-indexed occupied lane', () => {
+    let state = aiTurn(game());
+    state.players.p2.hand = [];
+    state = structuredClone(state);
+    state.lanes[1].sides.p1.building = { uid: 'test-bldg-1', cardId: 'building-bunker', ownerId: 'p1' };
+    state.lanes[3].sides.p1.building = { uid: 'test-bldg-3', cardId: 'building-bunker', ownerId: 'p1' };
+    const sabotage = giveCard(state, 'p2', 'power-sabotage'); // cost 2, enemy-building
+    state = sabotage.state;
+
+    const action = chooseAiAction(state, 'p2');
+    expect(action?.type).toBe('play-card');
+    if (action?.type === 'play-card') {
+      expect(action.laneIndex).toBe(1);
+      expect(action.targetLaneIndex).toBe(1);
+    }
+    const next = applyAction(state, action!);
+    expect(next.lanes[1].sides.p1.building).toBeNull();
+    expect(next.lanes[3].sides.p1.building?.cardId).toBe('building-bunker'); // untouched
+  });
+
+  it('uses a friendly-unit special across lanes on the strongest ally', () => {
+    let state = aiTurn(game());
+    state.players.p2.hand = [];
+    state = structuredClone(state);
+    placeUnit(state, 1, 'p2', 'combine-laser', 1, 1); // Targeting Laser: +2 ATK, cost 1, ready
+    placeCustomUnit(state, 0, 'p2', 5, 3); // stronger ally in a DIFFERENT lane
+
+    const action = chooseAiAction(state, 'p2');
+    expect(action).toEqual({
+      type: 'activate-special',
+      playerId: 'p2',
+      expectedRevision: state.revision,
+      laneIndex: 1,
+      targetLaneIndex: 0, // cross-lane: buff the 5-attack ally, not the 2-attack caster
+    });
+    const next = applyAction(state, action);
+    expect(next.lanes[0].sides.p2.unit?.attack).toBe(7); // 5 + 2
   });
 });
 

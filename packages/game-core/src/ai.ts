@@ -5,6 +5,7 @@ import {
   CardDefinition,
   Effect,
   GameAction,
+  GameRuleError,
   GameState,
   LaneState,
   PlayerId,
@@ -191,6 +192,7 @@ function chooseTarget(
         const unit = lane.sides[enemyId].unit;
         if (!unit) continue;
         const score = scoreEnemyUnit(state, lane, playerId, effects);
+        if (score < 0) continue; // vetoed (e.g. already stunned): never waste the card
         if (!best || score > best.score) best = { laneIndex: lane.index, score };
       }
       return best;
@@ -201,6 +203,7 @@ function chooseTarget(
         const unit = lane.sides[playerId].unit;
         if (!unit) continue;
         const score = scoreFriendlyUnit(state, lane, playerId, effects);
+        if (score < 0) continue; // vetoed (e.g. full-health heal): never waste the card
         if (!best || score > best.score) best = { laneIndex: lane.index, score };
       }
       return best;
@@ -369,7 +372,8 @@ function tryApply(state: GameState, action: GameAction): boolean {
   try {
     applyAction(state, action);
     return true;
-  } catch {
+  } catch (error) {
+    if (!(error instanceof GameRuleError)) throw error; // a real bug, not a rule rejection
     return false;
   }
 }
