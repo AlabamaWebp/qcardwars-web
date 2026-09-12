@@ -6,11 +6,116 @@ export type Lang = 'en' | 'ru';
 /**
  * Minimal EN/RU localization (request: "перевод всего приложения на русский").
  * No dependency: a flat key dictionary + a `qcw.lang` localStorage slot.
- * Translated: all UI chrome (lobby, board, modals, buttons, hints, lane and
- * faction names). NOT translated (documented limitation): card names /
- * descriptions and engine log / server error texts — they arrive as
- * authoritative English strings from game-core / the server.
+ * Translated: all UI chrome plus card descriptions and special descriptions.
+ * Card names remain canonical gameplay data; engine logs and server errors are
+ * also intentionally left untouched because they are authoritative strings.
  */
+
+const CARD_DESCRIPTIONS_RU: Record<string, string> = {
+  bucket: 'Запасной юнит: простой, надёжный и неизбежный.',
+  'antlion-runner': 'Быстрое давление на линию за низкую стоимость.',
+  'antlion-worker': 'После выживания в течение хода может плюнуть кислотой во вражеский юнит.',
+  'antlion-guard': 'Тяжёлое существо с разрушительным рывком.',
+  'combine-metrocop': 'Надёжный боец Альянса.',
+  'combine-soldier': 'Может усилить союзный юнит.',
+  'combine-elite': 'Дорогой финишер, способный стрелять прямо по вражескому герою.',
+  'rebel-scout': 'Дешёвый боец повстанцев.',
+  'rebel-medic': 'Помогает союзным юнитам выжить.',
+  'rebel-veteran': 'Может превратить союзника в более серьёзную угрозу.',
+  'zombie-shambler': 'Медленный, но живучий.',
+  'zombie-fast': 'Агрессивный зомби, способный исцелять себя.',
+  'zombie-poison': 'Крупный источник постоянного давления на линию.',
+  'universal-mercenary': 'Универсальный юнит для любой линии.',
+  'antlion-tinker': 'После выживания в течение хода плюётся летучей кислотой во вражеский юнит.',
+  'combine-laser': 'Наводит лазер на союзника, усиливая его оружие.',
+  'rebel-commander': 'Ведёт сопротивление и вызывает подкрепление.',
+  'zombie-bloater': 'Раздувшийся ужас, который по команде взрывается и обжигает героя врага.',
+  'building-field-hospital': 'В начале вашего хода исцеляет вашего юнита на этой линии на 1 ОЗ.',
+  'building-ammo-cache': 'Ваш юнит на этой линии получает +1 к атаке при атаке.',
+  'building-nest': 'Ваш юнит на этой линии получает +1 к атаке при атаке.',
+  'building-grave-mound': 'В начале вашего хода исцеляет вашего юнита на этой линии на 1 ОЗ.',
+  'building-bunker': 'Ваш юнит на этой линии получает +1 к атаке при атаке.',
+  'power-strike': 'Наносит вражескому юниту 3 урона.',
+  'power-rally': 'Даёт союзному юниту +2 к атаке и +2 к ОЗ.',
+  'power-shelling': 'Наносит вражескому герою 4 прямого урона.',
+  'power-sabotage': 'Уничтожает вражеское здание.',
+  'power-resupply': 'Добирает 2 карты.',
+  'power-berserk': 'Даёт союзному юниту +2 к атаке и +0 к ОЗ.',
+  'power-venom': 'Отравляет юнита: наносит 2 урона в начале следующих 2 ходов его владельца.',
+  'power-rot': 'Оскверняет юнита: наносит 1 урон в начале следующих 3 ходов его владельца.',
+  'power-scorch': 'Наносит 2 урона каждому юниту на линии — с обеих сторон.',
+  'power-mend': 'Восстанавливает вашему герою 3 ОЗ (не выше максимума).',
+  'power-overcharge': 'Даёт 2 маны (не выше максимума).',
+  'power-salvage': 'Добавляет Наёмника в вашу руку (теряется при полной руке).',
+  'power-execution': 'Уничтожает вражеский юнит.',
+  'power-wither': 'Уменьшает атаку вражеского юнита на 2 и наносит ему 1 урон.',
+  'antlion-spitter': 'Покрывает добычу ядом, который продолжает действовать.',
+  'rebel-engineer': 'Поддерживает сопротивление, включая героя.',
+  'combine-drone': 'Жужжащий ретранслятор, подключённый к сети Альянса.',
+  'antlion-swarm': 'Дешёвое давление числом.',
+  'antlion-hunter': 'Разрывает добычу ещё до приземления.',
+  'antlion-queen': 'Откладывает яйца, из которых вылупляются новые рои.',
+  'building-larva-pool': 'В начале вашего хода исцеляет вашего юнита на этой линии на 1 ОЗ.',
+  'power-acid-rain': 'Наносит 2 урона каждому юниту на линии — с обеих сторон.',
+  'combine-juggernaut': 'Неостановимый бронированный финишер.',
+  'building-power-substation': 'Ваш юнит на этой линии получает +2 к атаке при атаке.',
+  'rebel-guerrilla': 'Дешёвое, упрямое давление на линию.',
+  'rebel-ambusher': 'Атакует из засады ядовитым клинком.',
+  'building-supply-drop': 'В начале вашего хода исцеляет вашего юнита на этой линии на 2 ОЗ.',
+  'power-medic-convoy': 'Восстанавливает вашему герою 5 ОЗ (не выше максимума).',
+  'power-landmine': 'Наносит 3 урона каждому юниту на линии — с обеих сторон.',
+  'zombie-ghoul': 'Голодный и неумолимый.',
+  'zombie-plague': 'Его дыхание распространяет гниющую инфекцию.',
+  'zombie-brute': 'Огромная масса гниющих мышц.',
+  'zombie-titan': 'Башнеподобная стена нежити.',
+  'building-tomb': 'В начале вашего хода исцеляет вашего юнита на этой линии на 2 ОЗ.',
+  'power-extermination': 'Уничтожает вражеский юнит.',
+  'universal-guard': 'Крепкая защита для любой линии.',
+  'power-overclock': 'Даёт 3 маны (не выше максимума).',
+  'guardian-sentinel': 'Терпеливая стена из камня и света.',
+  'guardian-priest': 'Спокойной сияющей рукой залечивает раны.',
+  'guardian-bulwark': 'Непробиваемый бастион, укрепляющий союзников.',
+  'building-sacred-shrine': 'В начале вашего хода исцеляет вашего юнита на этой линии на 1 ОЗ.',
+  'power-sacred-light': 'Восстанавливает вашему герою 3 ОЗ (не выше максимума).',
+  'power-holy-shield': 'Даёт союзному юниту +0 к атаке и +3 к ОЗ.',
+  'wraith-stalker': 'Атакует прежде, чем его успевают заметить.',
+  'wraith-reaper': 'Его прикосновение иссушает плоть.',
+  'wraith-lord': 'Пустая корона, пьющая силу живых.',
+  'building-wraith-alter': 'Ваш юнит на этой линии получает +1 к атаке при атаке.',
+  'power-haunt': 'Преследует юнита: наносит 2 урона в начале следующих 2 ходов его владельца.',
+  'power-soul-theft': 'Уменьшает атаку вражеского юнита на 1, наносит ему 2 урона и восстанавливает вашему герою 2 ОЗ.',
+  'power-stasis-field': 'Оглушает вражеский юнит: тот пропускает следующую атаку.',
+  'power-terror-raid': 'Запугивает врага: он сбрасывает 2 случайные карты.',
+  'universal-demolition-volunteer': 'Заряд взрывчатки, который становится сильнее с каждым союзником рядом.',
+  'universal-drill-sergeant': 'Сразу после выхода в бой отдаёт приказ: получает +1 к атаке.',
+  'antlion-tunnel-harrier': 'Вырывается из норы и при ударе ослабляет добычу: -1 к атаке вражеского юнита.',
+  'antlion-chitin-skirmisher': 'Закалённый рейдер при ударе ломает добычу: -2 к атаке вражеского юнита.',
+  'antlion-nectar-swarm': 'Жужжащая туча, разрастающаяся с каждым союзником поблизости.',
+  'combine-riot-marshal': 'Сразу после вступления в бой вызывает подкрепление: добирает 1 карту.',
+  'combine-metro-bouncer': 'Выбрасывает выбранного вражеского юнита обратно в руку его владельца.',
+  'rebel-propaganda-runner': 'Передаёт дерзкое сообщение и жалит героя врага: 1 урон герою при выходе.',
+  'rebel-wrench-tinker': 'Уничтожив вражеский юнит в бою, отправляет запчасть в руку: добирает 1 карту.',
+  'zombie-rotting-warden': 'Покрывает цель гнилью: 2 урона в начале следующих 2 ходов её владельца.',
+  'zombie-plague-bearer': 'Выпускает заразные споры: 3 урона цели в течение 2 ходов.',
+  'wraith-phantom-harrier': 'Окутывает цель холодом и крадёт её следующую атаку: оглушение 1.',
+  'guardian-sacred-sentinel': 'Окружает себя ореолом божественной защиты.',
+};
+
+const SPECIAL_DESCRIPTIONS_RU: Record<string, string> = {
+  'antlion-worker': 'Наносит вражескому юниту 3 урона.', 'antlion-guard': 'Уничтожает себя и наносит 7 урона вражескому юниту.',
+  'combine-soldier': 'Даёт союзному юниту +2 к атаке и +1 к ОЗ.', 'combine-elite': 'Наносит герою врага 3 прямого урона.',
+  'rebel-medic': 'Исцеляет союзного юнита на 4 ОЗ.', 'rebel-veteran': 'Даёт союзному юниту +1 к атаке и +3 к ОЗ.',
+  'zombie-fast': 'Исцеляет себя на 3 ОЗ.', 'antlion-tinker': 'Наносит вражескому юниту 3 урона.',
+  'combine-laser': 'Даёт союзному юниту +2 к атаке и +0 к ОЗ.', 'rebel-commander': 'Добирает 1 карту.',
+  'zombie-bloater': 'Наносит герою врага 1 урон, затем уничтожает себя.', 'antlion-spitter': 'Отравляет вражеский юнит: 2 урона в начале следующих 2 ходов его владельца.',
+  'rebel-engineer': 'Восстанавливает вашему герою 2 ОЗ (не выше максимума).', 'combine-drone': 'Даёт 2 маны (не выше максимума).',
+  'antlion-hunter': 'Уменьшает атаку вражеского юнита на 1 и наносит ему 2 урона.', 'antlion-queen': 'Добавляет Рой жуков в руку (теряется при полной руке).',
+  'combine-juggernaut': 'Уничтожает вражеский юнит.', 'rebel-ambusher': 'Отравляет вражеский юнит: 2 урона в начале следующих 2 ходов его владельца.',
+  'zombie-plague': 'Отравляет вражеский юнит: 3 урона в начале следующих 2 ходов его владельца.', 'zombie-brute': 'Уменьшает атаку вражеского юнита на 2 и наносит ему 1 урон.',
+  'guardian-priest': 'Исцеляет союзного юнита на 4 ОЗ.', 'guardian-bulwark': 'Даёт союзному юниту +0 к атаке и +4 к ОЗ.',
+  'wraith-reaper': 'Наносит вражескому юниту 3 урона.', 'wraith-lord': 'Уменьшает атаку вражеского юнита на 2 и наносит ему 2 урона.',
+  'guardian-sacred-sentinel': 'Благословляет себя: +2 к атаке и +2 к ОЗ.', 'combine-metro-bouncer': 'Возвращает вражеского юнита в руку его владельца.',
+};
 const STRINGS = {
   'app.restoring': ['Restoring session…', 'Восстановление сессии…'],
   'app.goLobby': ['Go to lobby', 'В лобби'],
@@ -173,6 +278,14 @@ export class I18nService {
   t(key: I18nKey): string {
     const pair = STRINGS[key];
     return this.lang() === 'ru' ? pair[1] : pair[0];
+  }
+
+  cardDescription(cardId: string, fallback: string): string {
+    return this.isRu() ? (CARD_DESCRIPTIONS_RU[cardId] ?? fallback) : fallback;
+  }
+
+  specialDescription(cardId: string, fallback: string): string {
+    return this.isRu() ? (SPECIAL_DESCRIPTIONS_RU[cardId] ?? fallback) : fallback;
   }
 
   /** Localized lane/faction name for board frames and pickers. */

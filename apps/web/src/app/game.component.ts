@@ -110,7 +110,7 @@ import { SoundService } from './sound.service';
                       @if (unit.dot) { <span class="tip-poison">Poison: {{ unit.dot.amount }} damage at the start of its owner's turn, {{ unit.dot.turns }} {{ unit.dot.turns === 1 ? 'turn' : 'turns' }} left.</span> }
                       @if (unit.stun) { <span class="tip-stun">Stunned: skips its next {{ unit.stun.turns }} attack{{ unit.stun.turns === 1 ? '' : 's' }}.</span> }
                       @if (unit.turnsSurvived === 0) { <span class="tip-stagger">Just arrived: attacks from its owner's next turn.</span> }
-                      <span class="tip-desc">{{ getDef(unit.cardId).description }}</span>
+                      <span class="tip-desc">{{ i18n.cardDescription(unit.cardId, getDef(unit.cardId).description) }}</span>
                     </span>
                     </span>
                   </button>
@@ -122,7 +122,7 @@ import { SoundService } from './sound.service';
                     <span class="tip">
                       <span class="tip-name">{{ cardName(building.cardId) }}</span>
                       <span class="tip-meta">{{ getDef(building.cardId).kind }} · {{ getDef(building.cardId).faction }} · tier {{ getDef(building.cardId).tier }}</span>
-                      <span class="tip-desc">{{ getDef(building.cardId).description }}</span>
+                      <span class="tip-desc">{{ i18n.cardDescription(building.cardId, getDef(building.cardId).description) }}</span>
                     </span>
                   </button>
                 }
@@ -153,7 +153,7 @@ import { SoundService } from './sound.service';
                       @if (unit.dot) { <span class="tip-poison">Poison: {{ unit.dot.amount }} damage at the start of your turn, {{ unit.dot.turns }} {{ unit.dot.turns === 1 ? 'turn' : 'turns' }} left.</span> }
                       @if (unit.stun) { <span class="tip-stun">Stunned: skips its next {{ unit.stun.turns }} attack{{ unit.stun.turns === 1 ? '' : 's' }}.</span> }
                       @if (unit.turnsSurvived === 0) { <span class="tip-stagger">Just arrived: attacks from your next turn.</span> }
-                      <span class="tip-desc">{{ getDef(unit.cardId).description }}</span>
+                      <span class="tip-desc">{{ i18n.cardDescription(unit.cardId, getDef(unit.cardId).description) }}</span>
                     </span>
                     </span>
                   </button>
@@ -165,7 +165,7 @@ import { SoundService } from './sound.service';
                     <span class="tip">
                       <span class="tip-name">{{ cardName(building.cardId) }}</span>
                       <span class="tip-meta">{{ getDef(building.cardId).kind }} · {{ getDef(building.cardId).faction }} · tier {{ getDef(building.cardId).tier }}</span>
-                      <span class="tip-desc">{{ getDef(building.cardId).description }}</span>
+                      <span class="tip-desc">{{ i18n.cardDescription(building.cardId, getDef(building.cardId).description) }}</span>
                     </span>
                   </div>
                 }
@@ -248,7 +248,7 @@ import { SoundService } from './sound.service';
                 @if (card.kind === 'unit') {
                   <div class="detail-stats"><span><b>{{ card.attack }}</b> ATK</span><span><b>{{ card.health }}</b> HP</span></div>
                 }
-                <p class="detail-description">{{ card.description }}</p>
+              <p class="detail-description">{{ i18n.cardDescription(card.id, card.description) }}</p>
                 @if (card.kind === 'power') {
                   <div class="detail-rule"><b>{{ i18n.t('game.target') }}:</b> {{ targetLabel(card.target) }}</div>
                 }
@@ -268,7 +268,7 @@ import { SoundService } from './sound.service';
                   <div class="detail-special">
                     <div><span>⚡ {{ i18n.t('game.special') }}</span><strong>{{ special.name }}</strong></div>
                     <div class="detail-tags"><span>{{ special.cost }} {{ i18n.t('game.manaShort') }}</span><span>{{ special.uses }} {{ i18n.t('game.uses') }}</span><span>{{ targetLabel(special.target) }}</span></div>
-                    <p>{{ special.description }}</p>
+                    <p>{{ i18n.specialDescription(card.id, special.description) }}</p>
                   </div>
                 }
                 <button class="primary detail-done" type="button" (click)="closeCardDetails()">{{ i18n.t('game.close') }}</button>

@@ -9,7 +9,7 @@ import { I18nService } from './i18n.service';
   standalone: true,
   template: `
     <div class="card-wrap" [style.--faction-accent]="accent()">
-      <button class="card" [class.selected]="selected()" [disabled]="disabled()" [attr.aria-pressed]="selected()" [title]="def().description" (click)="picked.emit(card())">
+      <button class="card" [class.selected]="selected()" [disabled]="disabled()" [attr.aria-pressed]="selected()" [title]="i18n.cardDescription(def().id, def().description)" (click)="picked.emit(card())">
         <span class="cost">{{ def().cost }}</span>
         <span class="art-frame">
           <img class="art" [src]="art()" alt="" loading="lazy" (error)="artFailed.set(true)" [class.hidden]="artFailed()" />
@@ -20,7 +20,7 @@ import { I18nService } from './i18n.service';
         @if (def().kind === 'unit') {
           <div class="stats"><span>ATK {{ unitAtk }}</span><span>HP {{ unitHp }}</span></div>
         }
-        <p>{{ def().description }}</p>
+        <p>{{ i18n.cardDescription(def().id, def().description) }}</p>
       </button>
       <button
         type="button"
