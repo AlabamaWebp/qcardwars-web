@@ -53,11 +53,13 @@ import { SoundService } from './sound.service';
                 @if (side(lane, opponentId()).unit; as unit) {
                   <button class="unit" [attr.data-unit-uid]="unit.uid" [style.--chip-accent]="chipAccent(unit.cardId)" (click)="selectTarget(lane.index, $event)">
                     <b>{{ cardName(unit.cardId) }}</b><span>ATK {{ unit.effectiveAtk }} · HP {{ unit.health }}/{{ unit.maxHealth }}</span>
-                    <span class="badges">
-                      @if (unit.dot) { <span class="dot-badge" title="Poisoned">☠ {{ unit.dot.turns }}</span> }
-                      @if (unit.stun) { <span class="stun-badge" [title]="'Stunned: skips its next ' + unit.stun.turns + ' attack(s)'">✦ {{ unit.stun.turns }}</span> }
-                      @if (unit.turnsSurvived === 0) { <span class="stagger-badge" title="Just arrived: attacks from its owner's next turn">💤</span> }
-                    </span>
+                    @if (unit.dot || unit.stun || unit.turnsSurvived === 0) {
+                      <span class="badges">
+                        @if (unit.dot) { <span class="dot-badge" title="Poisoned">☠ {{ unit.dot.turns }}</span> }
+                        @if (unit.stun) { <span class="stun-badge" [title]="'Stunned: skips its next ' + unit.stun.turns + ' attack(s)'">✦ {{ unit.stun.turns }}</span> }
+                        @if (unit.turnsSurvived === 0) { <span class="stagger-badge" title="Just arrived: attacks from its owner's next turn">💤</span> }
+                      </span>
+                    }
                     <span class="tip">
                       <span class="tip-name">{{ cardName(unit.cardId) }}</span>
                       <span class="tip-meta">{{ getDef(unit.cardId).kind }} · {{ getDef(unit.cardId).faction }} · tier {{ getDef(unit.cardId).tier }}</span>
@@ -85,11 +87,13 @@ import { SoundService } from './sound.service';
                 @if (side(lane, g.selfPlayerId).unit; as unit) {
                   <button class="unit" [attr.data-unit-uid]="unit.uid" [style.--chip-accent]="chipAccent(unit.cardId)" (click)="ownUnitClick(lane.index, $event)">
                     <b>{{ cardName(unit.cardId) }}</b><span>ATK {{ unit.effectiveAtk }} · HP {{ unit.health }}/{{ unit.maxHealth }}</span>
-                    <span class="badges">
-                      @if (unit.dot) { <span class="dot-badge" title="Poisoned">☠ {{ unit.dot.turns }}</span> }
-                      @if (unit.stun) { <span class="stun-badge" [title]="'Stunned: skips its next ' + unit.stun.turns + ' attack(s)'">✦ {{ unit.stun.turns }}</span> }
-                      @if (unit.turnsSurvived === 0) { <span class="stagger-badge" title="Just arrived: attacks from your next turn">💤</span> }
-                    </span>
+                    @if (unit.dot || unit.stun || unit.turnsSurvived === 0) {
+                      <span class="badges">
+                        @if (unit.dot) { <span class="dot-badge" title="Poisoned">☠ {{ unit.dot.turns }}</span> }
+                        @if (unit.stun) { <span class="stun-badge" [title]="'Stunned: skips its next ' + unit.stun.turns + ' attack(s)'">✦ {{ unit.stun.turns }}</span> }
+                        @if (unit.turnsSurvived === 0) { <span class="stagger-badge" title="Just arrived: attacks from your next turn">💤</span> }
+                      </span>
+                    }
                     @if (specialLabel(unit.cardId); as label) { <small>{{ label }} · survived {{ unit.turnsSurvived }}</small> }
                     <span class="tip">
                       <span class="tip-name">{{ cardName(unit.cardId) }}</span>
