@@ -2181,15 +2181,15 @@ describe('M2 catalog: 15 new cards', () => {
     expect(effectiveAttack(state, state.lanes[0], 'p1')).toBe(4); // 3 base + 1 swarm x 1 friendly
   });
 
-  it('Drill Sergeant buffs itself +1/+1 on play (onPlay self)', () => {
+  it('Drill Sergeant buffs itself +1 attack on play (onPlay self)', () => {
     let state = game(243);
     state = setActive(state, 'p1');
     state = playCard(state, 'p1', 'universal-drill-sergeant', 1);
     const unit = state.lanes[1].sides.p1.unit!;
     expect(unit.cardId).toBe('universal-drill-sergeant');
     expect(unit.attack).toBe(2); // 1 + 1
-    expect(unit.health).toBe(4); // 3 + 1
-    expect(unit.maxHealth).toBe(4); // 3 + 1
+    expect(unit.health).toBe(3); // 3 + 0
+    expect(unit.maxHealth).toBe(3); // 3 + 0
   });
 
   it('Tunnel Harrier saps the enemy unit -1 ATK on play (onPlay enemy-unit)', () => {
