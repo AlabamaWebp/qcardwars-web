@@ -16,14 +16,18 @@ interface RoomCreatePayload {
   seed?: number;
   /** Solo match: the second seat is filled by the server-side AI. */
   solo?: boolean;
-  /** END-1 — the creator's 4-of-6 lane selection (validated server-side). */
+  /** The creator's OWN 4-lane selection (validated server-side). */
   laneTypes?: LaneType[];
+  /** Solo only: the AI's OWN 4-lane selection (mirrors the human if omitted). */
+  aiLaneTypes?: LaneType[];
 }
 
 interface RoomJoinPayload {
   code: string;
   name: string;
   seed?: number;
+  /** The joiner's OWN 4-lane selection (mirrors the creator if omitted). */
+  laneTypes?: LaneType[];
 }
 
 interface RoomRejoinPayload {
@@ -68,6 +72,7 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
         payload?.seed,
         payload?.solo,
         payload?.laneTypes,
+        payload?.aiLaneTypes,
       );
       client.join(room.code);
       client.emit('session:identity', { playerId, roomCode: room.code, token });
@@ -79,7 +84,7 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
   @SubscribeMessage('room:join')
   joinRoom(@ConnectedSocket() client: Socket, @MessageBody() payload: RoomJoinPayload) {
     return this.guard(client, () => {
-      const { room, playerId, token } = this.games.joinRoom(client.id, payload?.code, payload?.name, payload?.seed);
+      const { room, playerId, token } = this.games.joinRoom(client.id, payload?.code, payload?.name, payload?.seed, payload?.laneTypes);
       client.join(room.code);
       client.emit('session:identity', { playerId, roomCode: room.code, token });
       this.broadcastRoom(room);

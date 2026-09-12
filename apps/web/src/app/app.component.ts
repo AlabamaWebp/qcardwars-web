@@ -1,6 +1,7 @@
 import { Component, inject } from '@angular/core';
 import { GameClientService } from './game-client.service';
 import { GameComponent } from './game.component';
+import { I18nService } from './i18n.service';
 import { LobbyComponent } from './lobby.component';
 
 @Component({
@@ -12,8 +13,8 @@ import { LobbyComponent } from './lobby.component';
       <qcw-game />
     } @else if (client.restoring()) {
       <div class="restoring">
-        <div>Restoring session…</div>
-        <button type="button" class="cancel" (click)="client.cancelRestore()">Go to lobby</button>
+        <div>{{ i18n.t('app.restoring') }}</div>
+        <button type="button" class="cancel" (click)="client.cancelRestore()">{{ i18n.t('app.goLobby') }}</button>
       </div>
     } @else {
       <qcw-lobby />
@@ -37,4 +38,5 @@ import { LobbyComponent } from './lobby.component';
 })
 export class AppComponent {
   readonly client = inject(GameClientService);
+  readonly i18n = inject(I18nService);
 }

@@ -27,6 +27,13 @@ export interface RoomPlayer {
   connected: boolean;
   /** True for the solo AI seat (exempt from disconnect/grace/forfeit). */
   ai?: boolean;
+  /**
+   * This seat's OWN 4 lane types (validated, canonical order). Each side picks
+   * its own lanes — creator in the create form, joiner in the join form, AI in
+   * the solo form (or mirrored from the human when omitted) — so the two sides
+   * of a lane and the two decks may differ.
+   */
+  laneTypes: LaneType[];
 }
 
 export interface Room {
@@ -34,16 +41,12 @@ export interface Room {
   players: RoomPlayer[];
   game: GameState | null;
   seed?: number;
-  /** END-1 — the room's four lane types (creator selection, validated, canonical order). */
-  laneTypes: LaneType[];
 }
 
 export interface RoomView {
   code: string;
-  players: Array<{ id: string; name: string; connected: boolean }>;
+  players: Array<{ id: string; name: string; connected: boolean; laneTypes: LaneType[] }>;
   started: boolean;
-  /** END-1 — the room's four lane types (canonical pool order). */
-  laneTypes: LaneType[];
 }
 
 /** Default rejoin grace window (SPEC "Room lifecycle"): 120 seconds. */
@@ -93,20 +96,25 @@ export class GameService {
     seed?: number,
     solo?: boolean,
     rawLaneTypes?: unknown,
+    rawAiLaneTypes?: unknown,
   ): { room: Room; playerId: string; token: string } {
     // Validate before touching the caller's current session so a bad payload
     // can never strand them in a dropped room.
     const laneTypes =
       rawLaneTypes === undefined ? [...DEFAULT_LANE_TYPES] : this.assertLaneTypes(rawLaneTypes);
+    // The solo AI gets its own lanes: explicit selection wins, otherwise it
+    // mirrors the human (deterministic default; the lobby offers a dice button
+    // for a random AI set).
+    const aiLaneTypes =
+      rawAiLaneTypes === undefined ? [...laneTypes] : this.assertLaneTypes(rawAiLaneTypes);
     this.leaveBySocket(socketId);
     const code = this.generateRoomCode();
     const playerId = this.generatePlayerId();
     const room: Room = {
       code,
-      players: [{ playerId, socketId, name: this.cleanName(rawName), connected: true }],
+      players: [{ playerId, socketId, name: this.cleanName(rawName), connected: true, laneTypes }],
       game: null,
       seed: seed ?? undefined,
-      laneTypes,
     };
     if (solo) {
       // Solo match: fill the second seat with the AI and start immediately.
@@ -116,6 +124,7 @@ export class GameService {
         name: AI_PLAYER_NAME,
         connected: true,
         ai: true,
+        laneTypes: aiLaneTypes,
       });
       this.startIfReady(room);
     }
@@ -124,17 +133,22 @@ export class GameService {
     return { room, playerId, token: this.issueSessionToken(code, playerId) };
   }
 
-  joinRoom(socketId: string, rawCode: string, rawName: string, seed?: number): { room: Room; playerId: string; token: string } {
-    this.leaveBySocket(socketId);
+  joinRoom(socketId: string, rawCode: string, rawName: string, seed?: number, rawLaneTypes?: unknown): { room: Room; playerId: string; token: string } {
     const code = rawCode.trim().toUpperCase();
     const room = this.rooms.get(code);
     if (!room) throw new GameRuleError('ROOM_NOT_FOUND', 'Room not found.');
     if (room.players.length >= 2) throw new GameRuleError('ROOM_FULL', 'Room is full.');
     if (room.game) throw new GameRuleError('GAME_ALREADY_STARTED', 'Game already started.');
+    // The joiner picks their OWN lanes in the join form; when omitted they
+    // mirror the creator (previous behavior, keeps old clients working).
+    // Validated before leaveBySocket so a bad payload can't strand the caller.
+    const laneTypes =
+      rawLaneTypes === undefined ? [...room.players[0].laneTypes] : this.assertLaneTypes(rawLaneTypes);
+    this.leaveBySocket(socketId);
 
     const playerId = this.generatePlayerId();
     room.seed = seed ?? room.seed;
-    room.players.push({ playerId, socketId, name: this.cleanName(rawName), connected: true });
+    room.players.push({ playerId, socketId, name: this.cleanName(rawName), connected: true, laneTypes });
     this.socketToRoom.set(socketId, code);
     this.startIfReady(room);
     return { room, playerId, token: this.issueSessionToken(code, playerId) };
@@ -430,17 +444,17 @@ export class GameService {
         id: player.playerId,
         name: player.name,
         connected: player.connected,
+        laneTypes: [...player.laneTypes],
       })),
       started: Boolean(room.game),
-      laneTypes: room.laneTypes,
     };
   }
 
   /**
-   * END-1 — a room selection is exactly 4 distinct members of the 6-type lane
-   * pool. Client data is untrusted: this is the server-side gate (the engine
-   * re-validates in `createGame`). Returns the selection in canonical pool
-   * order.
+   * A seat selection is exactly 4 members of the 6-type lane pool (repeats
+   * allowed). Client data is untrusted: this is the server-side gate (the
+   * engine re-validates in `createGame`). Returns the selection in canonical
+   * pool order.
    */
   private assertLaneTypes(raw: unknown): LaneType[] {
     if (!Array.isArray(raw) || raw.length !== 4) {
@@ -551,9 +565,9 @@ export class GameService {
   }
 
   /**
-   * Fresh deterministic game for a room. END-1: the room's stored lane
-   * selection is the single source of truth (rematches keep it), so neither
-   * the client nor a default can drift the lane layout between matches.
+   * Fresh deterministic game for a room. Each seat's stored lane selection is
+   * the single source of truth (rematches keep both), so neither the client
+   * nor a default can drift the lane layout between matches.
    */
   private startGame(room: Room): GameState {
     return createGame({
@@ -563,7 +577,10 @@ export class GameService {
         { id: room.players[1].playerId, name: room.players[1].name },
       ],
       seed: room.seed,
-      config: { laneTypes: room.laneTypes },
+      laneTypesByPlayer: {
+        first: room.players[0].laneTypes,
+        second: room.players[1].laneTypes,
+      },
     });
   }
 

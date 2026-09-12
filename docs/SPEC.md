@@ -6,10 +6,12 @@ This spec resolves unknown original details into explicit, testable web defaults
 ## Match constants (baseline)
 
 - Players: 2
-- Lanes: 4 mirrored lanes, chosen at room creation from a six-type pool (END-1)
+- Lanes: 4 lane positions; EACH player chooses their own 4 lane types from a six-type pool (creator in the
+  create form, joiner in the join form, AI in the solo form) — the two sides of one position, and the two
+  decks, may differ (per-player lanes; supersedes the old shared-room-lanes baseline)
 - Lane pool: Antlion, Combine, Rebel, Zombie, Guardian, Wraith
-- Default selection (no selection supplied): the classic four — Antlion, Combine, Rebel, Zombie; the board is
-  always laid out in canonical pool order
+- Default selection (no selection supplied): the classic four — Antlion, Combine, Rebel, Zombie, per side;
+  each side is always laid out in canonical pool order
 - Starting HP: 30 (web default; not claimed original)
 - Mana cap: 10 (web default; not claimed original)
 - Starting hand: 4; the second player draws one extra card at match start (second-player compensation)
@@ -29,19 +31,29 @@ This spec resolves unknown original details into explicit, testable web defaults
 
 ## Lane model
 
-The room creator picks exactly 4 lane types from the 6-type pool (server-validated; an invalid selection — wrong
-count or unknown type — is rejected with `INVALID_LANE_TYPES`). Lane types may now repeat (e.g. two antlion
-lanes): the pick is a multiset, not a set of four distinct types, so a faction may fill more than one lane. The
-engine re-validates in `createGame` and normalizes the selection to canonical pool order while preserving
-multiplicities. Rematches in a room keep the same selection. Decks are built from universal cards plus cards of the
-selected lane factions only, so a card from a lane type the room is not using can never be drawn.
+Each player picks exactly 4 lane types from the 6-type pool (server-validated per seat; an invalid
+selection — wrong count or unknown type — is rejected with `INVALID_LANE_TYPES`). Lane types may repeat
+(e.g. two antlion lanes): the pick is a multiset, not a set of four distinct types. The engine validates
+each side independently in `createGame` and normalizes each side to canonical pool order while preserving
+multiplicities. Position `i` of the 4-lane board pairs side A's `i`-th lane with side B's `i`-th lane, so
+the two sides of one lane may be different types. Rematches keep both selections.
 
-Each lane has one shared type and two sides. Each player may have at most:
+- The room creator's selection is their OWN side (`room:create` `laneTypes`).
+- The joiner's selection is their OWN side (`room:join` `laneTypes`; when omitted they mirror the creator,
+  preserving old-client behavior).
+- The solo AI's selection is its OWN side (`room:create` `aiLaneTypes`; when omitted it mirrors the human).
+  The solo lobby offers a dice button for a random AI set.
+- Decks are built PER PLAYER from universal cards plus cards of that player's own lane factions only, so a
+  card from a lane type a player did not pick can never be drawn by them.
+
+Each lane position has one type per side and two sides. Each player may have at most:
 
 - 1 unit in that lane;
 - 1 building in that lane.
 
-A non-universal unit can only be played into a lane matching its faction. Buildings/powers define their targeting
+A non-universal unit/building can only be played into a lane whose type on the ACTING player's OWN side
+matches its faction. A faction power requires its faction in the acting player's own lane set (their deck
+only contains their own factions plus universal anyway). Buildings/powers define their remaining targeting
 rules in data.
 
 ## Turn flow

@@ -17,6 +17,7 @@ import {
   SpecialDefinition,
   UnitCardDefinition,
   UnitInstance,
+  PerPlayerLanes,
   LANE_TYPES,
   LaneType,
   DEFAULT_GAME_CONFIG,
@@ -27,6 +28,12 @@ export interface CreateGameOptions {
   players: [{ id: string; name: string }, { id: string; name: string }];
   seed?: number;
   config?: Partial<GameConfig>;
+  /**
+   * Per-player lane selections (`first` = players[0], `second` = players[1]).
+   * Each side picks its own 4 lanes, so boards and decks may be asymmetric. A
+   * missing side falls back to the shared `config.laneTypes` (mirrored board).
+   */
+  laneTypesByPlayer?: PerPlayerLanes | null;
 }
 
 function clone<T>(value: T): T {
@@ -45,7 +52,9 @@ function uid(state: GameState, prefix: string): string {
 
 function addLog(state: GameState, text: string): void {
   state.log.push({ seq: state.log.length ? state.log[state.log.length - 1].seq + 1 : 1, text });
-  if (state.log.length > 40) state.log.splice(0, state.log.length - 40);
+  // Full-log support: keep a long retained history (the footer shows the last
+  // 6, the "Full log" modal shows everything retained here).
+  if (state.log.length > 500) state.log.splice(0, state.log.length - 500);
 }
 
 function cardAllowedByLanes(cardId: string, laneTypes: readonly string[]): boolean {
@@ -53,8 +62,16 @@ function cardAllowedByLanes(cardId: string, laneTypes: readonly string[]): boole
   return card.faction === 'universal' || laneTypes.includes(card.faction);
 }
 
-function buildDeck(state: GameState): HandCard[] {
-  const eligible = CARD_CATALOG.filter((card) => cardAllowedByLanes(card.id, state.config.laneTypes));
+/** The acting player's OWN lane types (their 4 side types across the board). */
+function playerLaneTypes(state: GameState, playerId: PlayerId): LaneType[] {
+  return state.lanes.map((lane) => lane.sideTypes[playerId]);
+}
+
+function buildDeck(state: GameState, playerId: PlayerId): HandCard[] {
+  // Per-player decks: universal cards plus cards of the OWNER's lane factions
+  // only, so a card from a lane type the player did not pick can never be
+  // drawn by them (holds for symmetric and asymmetric boards alike).
+  const eligible = CARD_CATALOG.filter((card) => cardAllowedByLanes(card.id, playerLaneTypes(state, playerId)));
   const tiers = [...new Set(eligible.map((card) => card.tier))].sort((a, b) => a - b);
   const cardIds: string[] = [];
 
@@ -440,7 +457,9 @@ function playUnit(
 ): void {
   const lane = getLane(state, laneIndex);
   if (lane.sides[playerId].unit) fail('SLOT_OCCUPIED', 'That lane already has your unit.');
-  if (card.faction !== 'universal' && card.faction !== lane.type) {
+  // Per-player lanes: a faction card must match the lane type of the ACTING
+  // player's OWN side (the two sides of one lane may differ).
+  if (card.faction !== 'universal' && card.faction !== lane.sideTypes[playerId]) {
     fail('WRONG_LANE_TYPE', `${card.name} must be played on ${/^[aeiou]/i.test(card.faction) ? 'an' : 'a'} ${card.faction} lane.`);
   }
   // GA-4a onPlay: validate the lane-relative target BEFORE placement so a
@@ -478,7 +497,7 @@ function playBuilding(
 ): void {
   const lane = getLane(state, laneIndex);
   if (lane.sides[playerId].building) fail('SLOT_OCCUPIED', 'That lane already has your building.');
-  if (card.faction !== 'universal' && card.faction !== lane.type) {
+  if (card.faction !== 'universal' && card.faction !== lane.sideTypes[playerId]) {
     fail('WRONG_LANE_TYPE', `${card.name} must be played on ${/^[aeiou]/i.test(card.faction) ? 'an' : 'a'} ${card.faction} lane.`);
   }
   lane.sides[playerId].building = { uid: uid(state, 'building'), cardId: card.id, ownerId: playerId };
@@ -504,7 +523,10 @@ function playPower(
   card: PowerCardDefinition,
   targetLaneIndex: number | undefined,
 ): void {
-  if (card.faction !== 'universal' && !state.config.laneTypes.includes(card.faction)) {
+  // Per-player lanes: a faction power requires its faction in the ACTING
+  // player's own lane set (their deck only contains their own factions plus
+  // universal anyway, so this is a defense-in-depth gate).
+  if (card.faction !== 'universal' && !playerLaneTypes(state, playerId).includes(card.faction)) {
     fail('WRONG_LANE_TYPE', 'Power faction is not present in this match.');
   }
   if (card.effects.some((effect) => effect.type === 'aoe') && card.target !== 'lane') {
@@ -658,9 +680,24 @@ function handleEndTurn(state: GameState, action: Extract<GameAction, { type: 'en
 }
 
 /**
- * END-2 — a match runs exactly 4 lanes drawn from the 6-type pool; lane types
- * may now repeat (e.g. two antlion lanes) so a creator can concentrate the
- * board. Rejects a wrong count or an unknown type so the core never builds a
+ * Validate one player's 4-lane selection (exactly 4 pool members; repeats
+ * allowed) and normalize it to canonical pool order while preserving
+ * multiplicities, so the board layout stays deterministic regardless of the
+ * order the selection was supplied in (e.g. click order in the lobby).
+ */
+function normalizeLaneTypes(laneTypes: readonly LaneType[]): LaneType[] {
+  assertValidLaneTypes(laneTypes);
+  const laneCounts = new Map<LaneType, number>();
+  for (const type of laneTypes) {
+    laneCounts.set(type, (laneCounts.get(type) ?? 0) + 1);
+  }
+  return [...LANE_TYPES].flatMap((type) => new Array(laneCounts.get(type) ?? 0).fill(type));
+}
+
+/**
+ * A match side runs exactly 4 lanes drawn from the 6-type pool; lane types
+ * may repeat (e.g. two antlion lanes) so a player can concentrate their side.
+ * Rejects a wrong count or an unknown type so the core never builds a
  * malformed board even if a caller (client, test, future code) passes a bad
  * selection. Duplicates are intentionally allowed.
  */
@@ -679,19 +716,12 @@ function assertValidLaneTypes(laneTypes: readonly LaneType[]): void {
 
 export function createGame(options: CreateGameOptions): GameState {
   const config: GameConfig = { ...DEFAULT_GAME_CONFIG, ...options.config };
-  assertValidLaneTypes(config.laneTypes);
-  // END-2: normalize to canonical pool order while preserving the creator's
-  // lane multiplicities (duplicates allowed). The board layout stays
-  // deterministic regardless of the order a selection was supplied in
-  // (e.g. the room creator's click order), and nothing is dropped — a lane
-  // chosen twice stays twice.
-  const laneCounts = new Map<LaneType, number>();
-  for (const type of config.laneTypes) {
-    laneCounts.set(type, (laneCounts.get(type) ?? 0) + 1);
-  }
-  config.laneTypes = [...LANE_TYPES].flatMap((type) =>
-    new Array(laneCounts.get(type) ?? 0).fill(type),
-  );
+  // Per-player lanes: each side validates + normalizes its own 4 lanes
+  // independently (canonical pool order, multiplicities preserved). A missing
+  // side falls back to the shared config.laneTypes, i.e. a mirrored board —
+  // the legacy behavior every existing test and the default rooms rely on.
+  const firstNorm = normalizeLaneTypes(options.laneTypesByPlayer?.first ?? config.laneTypes);
+  const secondNorm = normalizeLaneTypes(options.laneTypesByPlayer?.second ?? config.laneTypes);
   const seed = (options.seed ?? Math.floor(Math.random() * 0x7fffffff)) || 1;
   const [first, second] = options.players;
   const firstActive = seed % 2 === 0 ? first.id : second.id;
@@ -732,9 +762,14 @@ export function createGame(options: CreateGameOptions): GameState {
     state.stats[player.id] = { turnsTaken: 0, cardsPlayed: 0, unitsDestroyed: 0, damageDealt: 0 };
   }
 
-  state.lanes = config.laneTypes.map((type, index) => ({
+  // Lane position i pairs the first player's i-th lane with the second
+  // player's i-th lane; the two sides may be different types.
+  state.lanes = [0, 1, 2, 3].map((index) => ({
     index,
-    type,
+    sideTypes: {
+      [first.id]: firstNorm[index],
+      [second.id]: secondNorm[index],
+    },
     sides: {
       [first.id]: { unit: null, building: null },
       [second.id]: { unit: null, building: null },
@@ -743,7 +778,7 @@ export function createGame(options: CreateGameOptions): GameState {
 
   for (const playerId of state.playerOrder) {
     const player = players[playerId];
-    player.deck = buildDeck(state);
+    player.deck = buildDeck(state, playerId);
     for (let i = 0; i < config.startingHand; i += 1) drawOne(state, player);
     // GA-5a initiative compensation: the player who does NOT start the match
     // draws one extra card.
@@ -812,7 +847,7 @@ function toClientLane(state: GameState, lane: LaneState): ClientLaneState {
       building: side.building ? clone(side.building) : null,
     };
   }
-  return { index: lane.index, type: lane.type, sides };
+  return { index: lane.index, sideTypes: { ...lane.sideTypes }, sides };
 }
 
 export function toClientView(

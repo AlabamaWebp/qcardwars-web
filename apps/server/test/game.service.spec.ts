@@ -82,30 +82,35 @@ describe('GameService lane selection (END-1)', () => {
   it('defaults to the classic four lanes when no selection is supplied', () => {
     const service = new GameService();
     const created = service.createRoom('s1', 'Alice');
-    expect(created.room.laneTypes).toEqual(['antlion', 'combine', 'rebel', 'zombie']);
+    expect(created.room.players[0].laneTypes).toEqual(['antlion', 'combine', 'rebel', 'zombie']);
     service.joinRoom('s2', created.room.code, 'Bob');
-    expect(service.roomForSocket('s1')!.game!.lanes.map((lane) => lane.type)).toEqual([
-      'antlion',
-      'combine',
-      'rebel',
-      'zombie',
-    ]);
+    // Both sides mirror the creator → symmetric classic board.
+    for (const playerId of service.roomForSocket('s1')!.game!.playerOrder) {
+      expect(service.roomForSocket('s1')!.game!.lanes.map((lane) => lane.sideTypes[playerId])).toEqual([
+        'antlion',
+        'combine',
+        'rebel',
+        'zombie',
+      ]);
+    }
   });
 
   it('stores a valid custom selection in canonical pool order and starts the game with it', () => {
     const service = new GameService();
     // Deliberately out-of-pool-order input.
     const created = service.createRoom('s1', 'Alice', undefined, false, ['wraith', 'guardian', 'combine', 'antlion']);
-    expect(created.room.laneTypes).toEqual(['antlion', 'combine', 'guardian', 'wraith']);
+    expect(created.room.players[0].laneTypes).toEqual(['antlion', 'combine', 'guardian', 'wraith']);
     const view = service.roomView(created.room);
-    expect(view.laneTypes).toEqual(['antlion', 'combine', 'guardian', 'wraith']);
+    expect(view.players[0].laneTypes).toEqual(['antlion', 'combine', 'guardian', 'wraith']);
     service.joinRoom('s2', created.room.code, 'Bob');
-    expect(service.roomForSocket('s1')!.game!.lanes.map((lane) => lane.type)).toEqual([
-      'antlion',
-      'combine',
-      'guardian',
-      'wraith',
-    ]);
+    for (const playerId of service.roomForSocket('s1')!.game!.playerOrder) {
+      expect(service.roomForSocket('s1')!.game!.lanes.map((lane) => lane.sideTypes[playerId])).toEqual([
+        'antlion',
+        'combine',
+        'guardian',
+        'wraith',
+      ]);
+    }
   });
 
   it('accepts a selection with a repeated lane type and stores it in canonical pool order', () => {
@@ -118,14 +123,16 @@ describe('GameService lane selection (END-1)', () => {
       false,
       ['antlion', 'guardian', 'antlion', 'zombie'],
     );
-    expect(created.room.laneTypes).toEqual(['antlion', 'antlion', 'zombie', 'guardian']);
+    expect(created.room.players[0].laneTypes).toEqual(['antlion', 'antlion', 'zombie', 'guardian']);
     service.joinRoom('s2', created.room.code, 'Bob');
-    expect(service.roomForSocket('s1')!.game!.lanes.map((lane) => lane.type)).toEqual([
-      'antlion',
-      'antlion',
-      'zombie',
-      'guardian',
-    ]);
+    for (const playerId of service.roomForSocket('s1')!.game!.playerOrder) {
+      expect(service.roomForSocket('s1')!.game!.lanes.map((lane) => lane.sideTypes[playerId])).toEqual([
+        'antlion',
+        'antlion',
+        'zombie',
+        'guardian',
+      ]);
+    }
   });
 
   it('rejects selections that are not exactly 4 pool members', () => {
@@ -169,15 +176,96 @@ describe('GameService lane selection (END-1)', () => {
     service.rematch('s1');
     const after = service.rematch('s2');
     expect(after.game!.status).toBe('playing');
-    expect(after.game!.lanes.map((lane) => lane.type)).toEqual(['antlion', 'combine', 'guardian', 'wraith']);
+    for (const playerId of after.game!.playerOrder) {
+      expect(after.game!.lanes.map((lane) => lane.sideTypes[playerId])).toEqual([
+        'antlion',
+        'combine',
+        'guardian',
+        'wraith',
+      ]);
+    }
   });
 
   it('starts solo rooms with the selected lanes', () => {
     const service = new GameService();
     const created = service.createRoom('s1', 'Alice', undefined, true, ['guardian', 'wraith', 'rebel', 'zombie']);
     expect(created.room.game).not.toBeNull();
-    expect(created.room.game!.lanes.map((lane) => lane.type)).toEqual(['rebel', 'zombie', 'guardian', 'wraith']);
+    for (const playerId of created.room.game!.playerOrder) {
+      expect(created.room.game!.lanes.map((lane) => lane.sideTypes[playerId])).toEqual([
+        'rebel',
+        'zombie',
+        'guardian',
+        'wraith',
+      ]);
+    }
     expect(created.room.players.find((seat) => seat.ai)?.name).toBe(AI_PLAYER_NAME);
+  });
+
+  it('gives the joiner their own lanes while the creator keeps theirs', () => {
+    const service = new GameService();
+    const created = service.createRoom('s1', 'Alice', undefined, false, ['antlion', 'antlion', 'antlion', 'antlion']);
+    service.joinRoom('s2', created.room.code, 'Bob', undefined, ['rebel', 'rebel', 'rebel', 'rebel']);
+    const room = service.roomForSocket('s1')!;
+    expect(room.players[0].laneTypes).toEqual(['antlion', 'antlion', 'antlion', 'antlion']);
+    expect(room.players[1].laneTypes).toEqual(['rebel', 'rebel', 'rebel', 'rebel']);
+    const [p1, p2] = room.game!.playerOrder;
+    expect(room.game!.lanes.map((lane) => lane.sideTypes[p1])).toEqual([
+      'antlion',
+      'antlion',
+      'antlion',
+      'antlion',
+    ]);
+    expect(room.game!.lanes.map((lane) => lane.sideTypes[p2])).toEqual(['rebel', 'rebel', 'rebel', 'rebel']);
+    // The room view exposes both selections; invalid join lanes are rejected.
+    const view = service.roomView(room);
+    expect(view.players[1].laneTypes).toEqual(['rebel', 'rebel', 'rebel', 'rebel']);
+  });
+
+  it('rejects invalid joiner lanes without starting the game or stranding the joiner', () => {
+    const service = new GameService();
+    const created = service.createRoom('s1', 'Alice');
+    const error = ruleErrorOf(() =>
+      service.joinRoom('s2', created.room.code, 'Bob', undefined, ['antlion', 'combine', 'rebel']),
+    );
+    expect(error.code).toBe('INVALID_LANE_TYPES');
+    expect(service.roomForSocket('s1')!.game).toBeNull();
+  });
+
+  it('gives the solo AI its own lanes when aiLaneTypes are supplied', () => {
+    const service = new GameService();
+    const created = service.createRoom(
+      's1',
+      'Alice',
+      undefined,
+      true,
+      ['antlion', 'antlion', 'antlion', 'antlion'],
+      ['wraith', 'wraith', 'wraith', 'wraith'],
+    );
+    const room = created.room;
+    const human = room.players.find((seat) => !seat.ai)!;
+    const ai = room.players.find((seat) => seat.ai)!;
+    expect(human.laneTypes).toEqual(['antlion', 'antlion', 'antlion', 'antlion']);
+    expect(ai.laneTypes).toEqual(['wraith', 'wraith', 'wraith', 'wraith']);
+    expect(room.game!.lanes.map((lane) => lane.sideTypes[human.playerId])).toEqual([
+      'antlion',
+      'antlion',
+      'antlion',
+      'antlion',
+    ]);
+    expect(room.game!.lanes.map((lane) => lane.sideTypes[ai.playerId])).toEqual([
+      'wraith',
+      'wraith',
+      'wraith',
+      'wraith',
+    ]);
+  });
+
+  it('rejects invalid AI lanes at solo creation', () => {
+    const service = new GameService();
+    const error = ruleErrorOf(() =>
+      service.createRoom('s1', 'Alice', undefined, true, undefined, ['antlion', 'combine']),
+    );
+    expect(error.code).toBe('INVALID_LANE_TYPES');
   });
 });
 
@@ -580,8 +668,15 @@ describe('GameService rejoin grace (P1-04)', () => {
     expect(after.game!.revision).toBe(0);
     expect(after.game!.players).toHaveProperty(created.playerId);
     expect(after.game!.players).toHaveProperty(service.aiSeat(after)!.playerId);
-    // END-1: the room's lane selection survives the rematch (canonical order).
-    expect(after.game!.lanes.map((lane) => lane.type)).toEqual(['rebel', 'zombie', 'guardian', 'wraith']);
+    // The room's lane selection survives the rematch (canonical order, both sides).
+    for (const playerId of after.game!.playerOrder) {
+      expect(after.game!.lanes.map((lane) => lane.sideTypes[playerId])).toEqual([
+        'rebel',
+        'zombie',
+        'guardian',
+        'wraith',
+      ]);
+    }
   });
 
   it('finished-room leave clears the other seat\'s session records (no leak)', async () => {

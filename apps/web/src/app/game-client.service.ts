@@ -90,10 +90,8 @@ export function diffClientViews(prev: ClientGameView, next: ClientGameView): Vis
 
 export interface RoomView {
   code: string;
-  players: Array<{ id: string; name: string; connected: boolean }>;
+  players: Array<{ id: string; name: string; connected: boolean; laneTypes: LaneType[] }>;
   started: boolean;
-  /** END-1 — the room's four lane types (canonical pool order). */
-  laneTypes: LaneType[];
 }
 
 export interface ServerErrorView {
@@ -251,17 +249,19 @@ export class GameClientService {
   }
 
   /**
-   * END-1 — `laneTypes` is the creator's 4-of-6 selection. When omitted the
-   * server falls back to the classic four lanes (backward compatible).
+   * `laneTypes` is the creator's OWN 4-lane selection; `aiLaneTypes` (solo
+   * only) is the AI's OWN selection. When omitted the server falls back to the
+   * classic four lanes (backward compatible).
    */
-  createRoom(name: string, solo = false, laneTypes?: LaneType[]) {
+  createRoom(name: string, solo = false, laneTypes?: LaneType[], aiLaneTypes?: LaneType[]) {
     this.error.set(null);
-    this.socket.emit('room:create', { name, solo, laneTypes });
+    this.socket.emit('room:create', { name, solo, laneTypes, aiLaneTypes });
   }
 
-  joinRoom(code: string, name: string) {
+  /** `laneTypes` is the joiner's OWN 4-lane selection (mirrors creator if omitted). */
+  joinRoom(code: string, name: string, laneTypes?: LaneType[]) {
     this.error.set(null);
-    this.socket.emit('room:join', { code, name });
+    this.socket.emit('room:join', { code, name, laneTypes });
   }
 
   sendAction(action: ClientAction) {

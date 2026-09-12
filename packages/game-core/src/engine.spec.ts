@@ -34,10 +34,23 @@ function giveCard(state: ReturnType<typeof game>, playerId: string, cardId: stri
   return { state: next, uid };
 }
 
+/** Shared lane-selection game builder (symmetric board unless stated otherwise). */
+function gameWithLanes(seed: number, laneTypes: readonly string[]): ReturnType<typeof game> {
+  return createGame({
+    roomCode: 'END1',
+    players: [
+      { id: 'p1', name: 'Alice' },
+      { id: 'p2', name: 'Bob' },
+    ],
+    seed,
+    config: { laneTypes: laneTypes as readonly LaneType[] },
+  });
+}
+
 describe('game-core baseline', () => {
   it('creates four typed lanes and hides opponent hand identities', () => {
     const state = game();
-    expect(state.lanes.map((lane) => lane.type)).toEqual(['antlion', 'combine', 'rebel', 'zombie']);
+    expect(state.lanes.map((lane) => lane.sideTypes['p1'])).toEqual(['antlion', 'combine', 'rebel', 'zombie']);
     const view = toClientView(state, 'p1');
     expect(view.players.p1.hand).not.toBeNull();
     expect(view.players.p2.hand).toBeNull();
@@ -1356,25 +1369,13 @@ describe('Phase D D-2: match summary stats', () => {
 });
 
 describe('selectable lanes (END-1)', () => {
-  function gameWithLanes(seed: number, laneTypes: readonly string[]): ReturnType<typeof game> {
-    return createGame({
-      roomCode: 'END1',
-      players: [
-        { id: 'p1', name: 'Alice' },
-        { id: 'p2', name: 'Bob' },
-      ],
-      seed,
-      config: { laneTypes: laneTypes as readonly LaneType[] },
-    });
-  }
-
   it('defaults to the classic four lanes when no selection is supplied', () => {
-    expect(game(7).lanes.map((lane) => lane.type)).toEqual(['antlion', 'combine', 'rebel', 'zombie']);
+    expect(game(7).lanes.map((lane) => lane.sideTypes['p1'])).toEqual(['antlion', 'combine', 'rebel', 'zombie']);
   });
 
   it('builds lanes in canonical pool order for an arbitrary 4-of-6 selection', () => {
     const state = gameWithLanes(7, ['wraith', 'guardian', 'combine', 'antlion']);
-    expect(state.lanes.map((lane) => lane.type)).toEqual(['antlion', 'combine', 'guardian', 'wraith']);
+    expect(state.lanes.map((lane) => lane.sideTypes['p1'])).toEqual(['antlion', 'combine', 'guardian', 'wraith']);
   });
 
   it('rejects lane selections that are not exactly 4 pool members', () => {
@@ -1402,7 +1403,7 @@ describe('selectable lanes (END-1)', () => {
 
   it('accepts a lane selection with a repeated type and preserves multiplicities in canonical order', () => {
     const state = gameWithLanes(5, ['antlion', 'guardian', 'antlion', 'zombie']);
-    expect(state.lanes.map((lane) => lane.type)).toEqual(['antlion', 'antlion', 'zombie', 'guardian']);
+    expect(state.lanes.map((lane) => lane.sideTypes['p1'])).toEqual(['antlion', 'antlion', 'zombie', 'guardian']);
   });
 
   it('decks contain only cards whose faction is universal or a selected lane', () => {
@@ -1466,9 +1467,130 @@ describe('selectable lanes (END-1)', () => {
       ),
     ).toBe('WRONG_LANE_TYPE');
   });
+});
 
-  it('wraith Death Touch kills a 3-HP enemy unit in another lane', () => {
-    let state = gameWithLanes(17, ['rebel', 'zombie', 'guardian', 'wraith']);
+describe('per-player lanes (each side chooses its own 4)', () => {
+  function asymmetric(seed = 21) {
+    return createGame({
+      roomCode: 'ASYM',
+      players: [
+        { id: 'p1', name: 'Alice' },
+        { id: 'p2', name: 'Bob' },
+      ],
+      seed,
+      laneTypesByPlayer: {
+        // Supplied out of order on purpose: each side normalizes independently.
+        first: ['zombie', 'antlion', 'antlion', 'combine'] as LaneType[],
+        second: ['wraith', 'rebel', 'rebel', 'rebel'] as LaneType[],
+      },
+    });
+  }
+
+  it('pairs the two normalized side selections positionally', () => {
+    const state = asymmetric();
+    expect(state.lanes.map((lane) => lane.sideTypes['p1'])).toEqual([
+      'antlion',
+      'antlion',
+      'combine',
+      'zombie',
+    ]);
+    expect(state.lanes.map((lane) => lane.sideTypes['p2'])).toEqual([
+      'rebel',
+      'rebel',
+      'rebel',
+      'wraith',
+    ]);
+  });
+
+  it('validates unit placement against the acting player’s OWN side', () => {
+    const active = setActive(asymmetric(), 'p1');
+    // Lane 0 is antlion for p1 but rebel for p2: p1's antlion unit fits.
+    const played = playCard(active, 'p1', 'antlion-runner', 0);
+    expect(played.lanes[0].sides.p1.unit?.cardId).toBe('antlion-runner');
+    // …but p1's zombie unit does not fit lane 0 (zombie is p1's lane 3).
+    const rejected = giveCard(active, 'p1', 'zombie-shambler');
+    expect(
+      ruleCode(() =>
+        applyAction(rejected.state, {
+          type: 'play-card',
+          playerId: 'p1',
+          expectedRevision: rejected.state.revision,
+          handCardUid: rejected.uid,
+          laneIndex: 0,
+        }),
+      ),
+    ).toBe('WRONG_LANE_TYPE');
+  });
+
+  it('lets the other side use the same lane position with its own faction', () => {
+    const active = setActive(asymmetric(), 'p2');
+    // Lane 3 is wraith for p2 (zombie for p1): p2's wraith unit fits.
+    const played = playCard(active, 'p2', 'wraith-stalker', 3);
+    expect(played.lanes[3].sides.p2.unit?.cardId).toBe('wraith-stalker');
+  });
+
+  it('builds each deck from its owner’s lane factions only', () => {
+    const state = asymmetric();
+    const own = { p1: new Set(['antlion', 'combine', 'zombie']), p2: new Set(['rebel', 'wraith']) };
+    for (const playerId of ['p1', 'p2'] as const) {
+      expect(state.players[playerId].deck.length).toBeGreaterThan(0);
+      for (const handCard of [...state.players[playerId].deck, ...state.players[playerId].hand]) {
+        const faction = CARD_BY_ID.get(handCard.cardId)!.faction;
+        expect(faction === 'universal' || own[playerId].has(faction)).toBe(true);
+      }
+    }
+  });
+
+  it('mirrors the shared config lanes when no per-player selection is given', () => {
+    const state = createGame({
+      roomCode: 'END1',
+      players: [
+        { id: 'p1', name: 'Alice' },
+        { id: 'p2', name: 'Bob' },
+      ],
+      seed: 7,
+      config: { laneTypes: ['wraith', 'guardian', 'combine', 'antlion'] as LaneType[] },
+    });
+    expect(state.lanes.map((lane) => lane.sideTypes['p1'])).toEqual([
+      'antlion',
+      'combine',
+      'guardian',
+      'wraith',
+    ]);
+    expect(state.lanes.map((lane) => lane.sideTypes['p2'])).toEqual([
+      'antlion',
+      'combine',
+      'guardian',
+      'wraith',
+    ]);
+  });
+
+  it('rejects an invalid selection on either side', () => {
+    expect(
+      ruleCode(() =>
+        createGame({
+          roomCode: 'BAD2',
+          players: [
+            { id: 'p1', name: 'A' },
+            { id: 'p2', name: 'B' },
+          ],
+          seed: 3,
+          laneTypesByPlayer: {
+            first: ['antlion', 'combine', 'rebel', 'zombie'] as LaneType[],
+            second: ['antlion', 'combine', 'rebel'] as unknown as LaneType[],
+          },
+        }),
+      ),
+    ).toBe('INVALID_LANE_TYPES');
+  });
+
+  it('exposes per-side lane types in the client view', () => {
+    const view = toClientView(asymmetric(), 'p1');
+    expect(view.lanes[0].sideTypes['p1']).toBe('antlion');
+    expect(view.lanes[0].sideTypes['p2']).toBe('rebel');
+  });
+
+  it('wraith Death Touch kills a 3-HP enemy unit in another lane', () => {    let state = gameWithLanes(17, ['rebel', 'zombie', 'guardian', 'wraith']);
     state = setActive(state, 'p1');
     state = playCard(state, 'p1', 'wraith-reaper', 3); // 3/2 in the wraith lane
     state = endTurn(state, 'p1');

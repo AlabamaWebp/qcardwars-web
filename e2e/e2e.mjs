@@ -463,7 +463,9 @@ async function main() {
   const browser = await puppeteer.launch({
     executablePath: CHROME,
     headless: true,
-    args: ['--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage', '--window-size=1440,900'],
+    // Pin the UI locale to en-US: the app auto-detects the browser language
+    // for its EN/RU toggle, and the specs assert English lane names.
+    args: ['--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage', '--window-size=1440,900', '--lang=en-US'],
   });
 
   let failed = 0;

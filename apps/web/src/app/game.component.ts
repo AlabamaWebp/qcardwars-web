@@ -1,7 +1,9 @@
 import { Component, DestroyRef, ElementRef, computed, effect, inject, signal } from '@angular/core';
 import type { Faction } from '@qcw/game-core';
 import { getCard, HandCard, ClientLaneState, PlayerId } from '@qcw/game-core';
+import { cardArtUrl, hideBrokenArt } from './card-art';
 import { CardComponent } from './card.component';
+import { I18nService } from './i18n.service';
 import { FACTION_THEME } from './faction-theme';
 import { GameClientService, VisualEvent } from './game-client.service';
 import { SoundService } from './sound.service';
@@ -15,43 +17,60 @@ import { SoundService } from './sound.service';
       <main class="game-shell">
         <header>
           <div>
-            <button class="ghost" (click)="client.leaveRoom()">← Lobby</button>
+            <button class="ghost" (click)="client.leaveRoom()">{{ i18n.t('game.lobby') }}</button>
             <strong>Room {{ g.roomCode }}</strong>
           </div>
           <div class="turn" [class.mine]="client.isMyTurn()">
-            @if (client.reconnected()) { <span class="reconnected">reconnected</span> }
-            {{ g.status === 'finished' ? 'MATCH OVER' : (client.isMyTurn() ? 'YOUR TURN' : 'OPPONENT TURN') }}
+            @if (client.reconnected()) { <span class="reconnected">{{ i18n.t('game.reconnected') }}</span> }
+            {{ g.status === 'finished' ? i18n.t('game.over') : (client.isMyTurn() ? i18n.t('game.yourTurn') : i18n.t('game.oppTurn')) }}
           </div>
           <div class="header-right">
+            <button
+              type="button"
+              class="ghost lang"
+              [title]="i18n.t('lang.label')"
+              (click)="i18n.toggle()"
+            >{{ i18n.t('lang.toggle') }}</button>
             <!-- Phase A.2: sound toggle. Persisted in localStorage (qcw.sound), default on. -->
             <button
               class="ghost sound"
               aria-label="Sound"
               [attr.aria-pressed]="sound.enabled() ? 'true' : 'false'"
-              [title]="sound.enabled() ? 'Sound on — click to mute' : 'Sound off — click to unmute'"
+              [title]="sound.enabled() ? i18n.t('game.soundOn') : i18n.t('game.soundOff')"
               (click)="sound.toggle()"
             >{{ sound.enabled() ? '🔊' : '🔇' }}</button>
-            <button class="end" (click)="endTurn()" [disabled]="!client.isMyTurn()">End turn</button>
+            <button class="end" (click)="endTurn()" [disabled]="!client.isMyTurn()">{{ i18n.t('game.endTurn') }}</button>
           </div>
         </header>
 
         <section class="opponent playerbar" [attr.data-player-bar]="opponentId()">
-          <div><b>{{ opponent().name }}</b><span>{{ opponent().connected ? 'online' : 'disconnected' }}</span></div>
-          <div>HP <strong>{{ opponent().hp }}</strong></div>
-          <div>Mana {{ opponent().mana }}/{{ opponent().maxMana }}</div>
-          <div>Hand {{ opponent().handCount }} · Deck {{ opponent().deckCount }}</div>
+          <div><b>{{ opponent().name }}</b><span>{{ opponent().connected ? i18n.t('game.online') : i18n.t('game.offline') }}</span></div>
+          <div>{{ i18n.t('game.hp') }} <strong>{{ opponent().hp }}</strong></div>
+          <div>{{ i18n.t('game.mana') }} {{ opponent().mana }}/{{ opponent().maxMana }}</div>
+          <div>{{ i18n.t('game.hand') }} {{ opponent().handCount }} · {{ i18n.t('game.deck') }} {{ opponent().deckCount }}</div>
           @if (opponent().fatigue > 0) {
-            <div class="fatigue" [title]="'Empty deck: takes ' + opponent().fatigue + ' damage on each empty draw (grows by 1 each time)'">☄ Fatigue {{ opponent().fatigue }}</div>
+            <div class="fatigue" [title]="i18n.t('game.fatigueFoe') + ' ' + opponent().fatigue + ' ' + i18n.t('game.fatigueTail')">☄ Fatigue {{ opponent().fatigue }}</div>
           }
         </section>
 
         <section class="board">
           @for (lane of g.lanes; track lane.index) {
-            <article class="lane" [attr.data-lane-index]="lane.index" [class.targetable]="selectedCard() && client.isMyTurn()" [style.--lane-accent]="laneAccent(lane.type)" [style.--lane-glow]="laneGlow(lane.type)" (click)="laneClick(lane.index)">
-              <div class="lane-name">{{ lane.type }} <span>#{{ lane.index + 1 }}</span></div>
+            <article class="lane" [attr.data-lane-index]="lane.index" [class.targetable]="selectedCard() && client.isMyTurn()" [style.--lane-accent]="laneAccent(ownSideType(lane))" [style.--lane-glow]="laneGlow(ownSideType(lane))" (click)="laneClick(lane.index)">
+              <div class="lane-name">
+                @if (ownSideType(lane) === enemySideType(lane)) {
+                  {{ i18n.faction(ownSideType(lane)) }} <span>#{{ lane.index + 1 }}</span>
+                } @else {
+                  <span class="side you" [style.color]="laneAccent(ownSideType(lane))">{{ i18n.t('game.you') }}: {{ i18n.faction(ownSideType(lane)) }}</span>
+                  <span class="vs">·</span>
+                  <span class="side foe" [style.color]="laneAccent(enemySideType(lane))">{{ i18n.t('game.foe') }}: {{ i18n.faction(enemySideType(lane)) }}</span>
+                  <span>#{{ lane.index + 1 }}</span>
+                }
+              </div>
               <div class="slot enemy">
                 @if (side(lane, opponentId()).unit; as unit) {
                   <button class="unit" [attr.data-unit-uid]="unit.uid" [style.--chip-accent]="chipAccent(unit.cardId)" (click)="selectTarget(lane.index, $event)">
+                    <img class="thumb" [src]="artFor(unit.cardId)" alt="" loading="lazy" (error)="hideArt($event)" />
+                    <span class="chip-body">
                     <b>{{ cardName(unit.cardId) }}</b><span>ATK {{ unit.effectiveAtk }} · HP {{ unit.health }}/{{ unit.maxHealth }}</span>
                     @if (unit.dot || unit.stun || unit.turnsSurvived === 0) {
                       <span class="badges">
@@ -70,10 +89,13 @@ import { SoundService } from './sound.service';
                       @if (unit.turnsSurvived === 0) { <span class="tip-stagger">Just arrived: attacks from its owner's next turn.</span> }
                       <span class="tip-desc">{{ getDef(unit.cardId).description }}</span>
                     </span>
+                    </span>
                   </button>
-                } @else { <span class="empty">enemy unit</span> }
+                } @else { <span class="empty">{{ i18n.t('game.enemyUnit') }}</span> }
                 @if (side(lane, opponentId()).building; as building) {
-                  <button class="building" [attr.data-building-uid]="building.uid" [style.--chip-accent]="chipAccent(building.cardId)" (click)="selectTarget(lane.index, $event)">⌂ {{ cardName(building.cardId) }}
+                  <button class="building" [attr.data-building-uid]="building.uid" [style.--chip-accent]="chipAccent(building.cardId)" (click)="selectTarget(lane.index, $event)">
+                    <img class="thumb" [src]="artFor(building.cardId)" alt="" loading="lazy" (error)="hideArt($event)" />
+                    <span class="building-name">⌂ {{ cardName(building.cardId) }}</span>
                     <span class="tip">
                       <span class="tip-name">{{ cardName(building.cardId) }}</span>
                       <span class="tip-meta">{{ getDef(building.cardId).kind }} · {{ getDef(building.cardId).faction }} · tier {{ getDef(building.cardId).tier }}</span>
@@ -86,6 +108,8 @@ import { SoundService } from './sound.service';
               <div class="slot own">
                 @if (side(lane, g.selfPlayerId).unit; as unit) {
                   <button class="unit" [attr.data-unit-uid]="unit.uid" [style.--chip-accent]="chipAccent(unit.cardId)" (click)="ownUnitClick(lane.index, $event)">
+                    <img class="thumb" [src]="artFor(unit.cardId)" alt="" loading="lazy" (error)="hideArt($event)" />
+                    <span class="chip-body">
                     <b>{{ cardName(unit.cardId) }}</b><span>ATK {{ unit.effectiveAtk }} · HP {{ unit.health }}/{{ unit.maxHealth }}</span>
                     @if (unit.dot || unit.stun || unit.turnsSurvived === 0) {
                       <span class="badges">
@@ -105,10 +129,13 @@ import { SoundService } from './sound.service';
                       @if (unit.turnsSurvived === 0) { <span class="tip-stagger">Just arrived: attacks from your next turn.</span> }
                       <span class="tip-desc">{{ getDef(unit.cardId).description }}</span>
                     </span>
+                    </span>
                   </button>
-                } @else { <span class="empty">your unit</span> }
+                } @else { <span class="empty">{{ i18n.t('game.yourUnit') }}</span> }
                 @if (side(lane, g.selfPlayerId).building; as building) {
-                  <div class="building" tabindex="0" [attr.data-building-uid]="building.uid" [style.--chip-accent]="chipAccent(building.cardId)">⌂ {{ cardName(building.cardId) }}
+                  <div class="building" tabindex="0" [attr.data-building-uid]="building.uid" [style.--chip-accent]="chipAccent(building.cardId)">
+                    <img class="thumb" [src]="artFor(building.cardId)" alt="" loading="lazy" (error)="hideArt($event)" />
+                    <span class="building-name">⌂ {{ cardName(building.cardId) }}</span>
                     <span class="tip">
                       <span class="tip-name">{{ cardName(building.cardId) }}</span>
                       <span class="tip-meta">{{ getDef(building.cardId).kind }} · {{ getDef(building.cardId).faction }} · tier {{ getDef(building.cardId).tier }}</span>
@@ -122,12 +149,12 @@ import { SoundService } from './sound.service';
         </section>
 
         <section class="self playerbar" [attr.data-player-bar]="g.selfPlayerId">
-          <div><b>{{ self().name }}</b><span>{{ self().connected ? 'online' : 'disconnected' }}</span></div>
-          <div>HP <strong>{{ self().hp }}</strong></div>
-          <div>Mana <strong>{{ self().mana }}/{{ self().maxMana }}</strong></div>
-          <div>Deck {{ self().deckCount }}</div>
+          <div><b>{{ self().name }}</b><span>{{ self().connected ? i18n.t('game.online') : i18n.t('game.offline') }}</span></div>
+          <div>{{ i18n.t('game.hp') }} <strong>{{ self().hp }}</strong></div>
+          <div>{{ i18n.t('game.mana') }} <strong>{{ self().mana }}/{{ self().maxMana }}</strong></div>
+          <div>{{ i18n.t('game.deck') }} {{ self().deckCount }}</div>
           @if (self().fatigue > 0) {
-            <div class="fatigue" [title]="'Empty deck: you take ' + self().fatigue + ' damage on each empty draw (grows by 1 each time)'">☄ Fatigue {{ self().fatigue }}</div>
+            <div class="fatigue" [title]="i18n.t('game.fatigueYou') + ' ' + self().fatigue + ' ' + i18n.t('game.fatigueTail')">☄ Fatigue {{ self().fatigue }}</div>
           }
         </section>
 
@@ -145,25 +172,42 @@ import { SoundService } from './sound.service';
         <section class="footer-grid">
           <div class="hint">
             @if (selectedCard()) {
-               Selected <b>{{ getDef(selectedCard()!.cardId).name }}</b>. Click a lane/target to play. Click the card again to cancel.
+               {{ i18n.t('game.selA') }} <b>{{ getDef(selectedCard()!.cardId).name }}</b>{{ i18n.t('game.selB') }}
             } @else {
-              Select a card, or click one of your surviving units to attempt its special.
+              {{ i18n.t('game.hintEmpty') }}
             }
             @if (client.error()) { <div class="error">{{ client.error()!.message }}</div> }
           </div>
           <div class="log">
+            <div class="log-head"><span>{{ i18n.t('game.log') }}</span><button class="ghost small" (click)="showFullLog.set(true)">{{ i18n.t('game.fullLog') }} ({{ g.log.length }})</button></div>
             @for (entry of g.log.slice(-6).reverse(); track entry.seq) { <div>{{ entry.text }}</div> }
           </div>
         </section>
 
+        @if (showFullLog()) {
+          <div class="modal-backdrop" (click)="showFullLog.set(false)">
+            <section class="modal log-modal" (click)="$event.stopPropagation()">
+              <div class="eyebrow">{{ i18n.t('game.fullLogTitle') }}</div>
+              <h2>{{ i18n.t('game.logTitle') }}</h2>
+              <div class="full-log">
+                @for (entry of g.log; track entry.seq) { <div><span class="seq">#{{ entry.seq }}</span> {{ entry.text }}</div> }
+                @empty { <div>{{ i18n.t('game.noEntries') }}</div> }
+              </div>
+              <div class="modal-actions">
+                <button class="primary" (click)="showFullLog.set(false)">{{ i18n.t('game.close') }}</button>
+              </div>
+            </section>
+          </div>
+        }
+
         @if (g.status === 'finished') {
           <div class="modal-backdrop">
             <section class="modal">
-              <div class="eyebrow">match complete</div>
-              <h2>{{ g.winnerId === g.selfPlayerId ? 'Victory' : 'Defeat' }}</h2>
+              <div class="eyebrow">{{ i18n.t('game.matchComplete') }}</div>
+              <h2>{{ g.winnerId === g.selfPlayerId ? i18n.t('game.victory') : i18n.t('game.defeat') }}</h2>
               <table class="stats">
                 <thead>
-                  <tr><th></th><th>Turns</th><th>Cards</th><th>Kills</th><th>Dmg</th></tr>
+                  <tr><th></th><th>{{ i18n.t('game.turns') }}</th><th>{{ i18n.t('game.cards') }}</th><th>{{ i18n.t('game.kills') }}</th><th>{{ i18n.t('game.dmg') }}</th></tr>
                 </thead>
                 <tbody>
                   @for (pid of g.playerOrder; track pid) {
@@ -178,19 +222,19 @@ import { SoundService } from './sound.service';
                 </tbody>
               </table>
               @if (isSolo()) {
-                <p>Solo match: the AI auto-rematches, so your confirmation starts the next match immediately.</p>
+                <p>{{ i18n.t('game.soloNote') }}</p>
               } @else if (!opponent().connected) {
-                <p>Your opponent has left the match — no rematch is possible. Return to the lobby to create or join a room.</p>
+                <p>{{ i18n.t('game.leftNote') }}</p>
               } @else if (!rematchRequested()) {
-                <p>A two-player rematch handshake: both players must confirm.</p>
+                <p>{{ i18n.t('game.handshakeNote') }}</p>
               } @else {
-                <p class="waiting">{{ isSolo() ? 'Starting rematch…' : 'Waiting for your opponent to confirm the rematch…' }}</p>
+                <p class="waiting">{{ isSolo() ? i18n.t('game.startingNote') : i18n.t('game.waitingNote') }}</p>
               }
               <div class="modal-actions">
                 @if (opponent().connected && !rematchRequested()) {
-                  <button class="primary" (click)="requestRematch()">{{ isSolo() ? 'Rematch vs AI' : 'Request rematch' }}</button>
+                  <button class="primary" (click)="requestRematch()">{{ isSolo() ? i18n.t('game.rematchAi') : i18n.t('game.rematch') }}</button>
                 }
-                <button class="ghost" (click)="client.leaveRoom()">Return to lobby</button>
+                <button class="ghost" (click)="client.leaveRoom()">{{ i18n.t('game.returnLobby') }}</button>
               </div>
             </section>
           </div>
@@ -209,11 +253,26 @@ import { SoundService } from './sound.service';
     /* Faction identity (Phase A.1): --lane-accent/--lane-glow are set per lane from
        lane.type via [style.*] bindings; the gold targetable hover still wins. */
     .lane { background:linear-gradient(#151a23,#0e1117); border:1px solid var(--lane-accent,#2d3441); box-shadow:0 0 14px -3px var(--lane-glow,transparent); border-radius:13px; padding:9px; display:grid; grid-template-rows:auto 1fr 1px 1fr; gap:8px; min-width:0; }
-    .lane.targetable:hover{border-color:#d7b76c}.lane-name{text-transform:uppercase;letter-spacing:.12em;font-size:11px;font-weight:900;color:var(--lane-accent,#d7b76c);display:flex;justify-content:space-between}.lane-name span{color:#687183}
+    .lane.targetable:hover{border-color:#d7b76c}.lane-name{text-transform:uppercase;letter-spacing:.12em;font-size:11px;font-weight:900;color:var(--lane-accent,#d7b76c);display:flex;justify-content:space-between;gap:6px}.lane-name span{color:#687183}.lane-name .vs{color:#687183}.lane-name .side{text-transform:uppercase;letter-spacing:.1em}
     .slot{display:grid;align-content:center;gap:6px;min-height:150px}.divider{background:#343b48}.empty{display:grid;place-items:center;height:100%;border:1px dashed #313847;border-radius:10px;color:#515b6c;font-size:11px;text-transform:uppercase;letter-spacing:.1em}
     /* --chip-accent is set per chip from getCard(cardId).faction; the inset shadow
        (not a wider border) tints the left edge with zero layout shift. */
-    .unit,.building{width:100%;position:relative;border:1px solid #3c4554;background:#202631;color:#fff;border-radius:10px;padding:10px;text-align:left;box-shadow:inset 3px 0 0 0 var(--chip-accent,transparent)}.unit{display:grid;gap:5px}.unit>span,.unit>small{font-size:11px;color:#c1c7d2}.unit>small{color:#d7b76c}.building{font-size:11px;background:#242017;border-color:#50462e;color:#e7d49e}
+    .unit,.building{width:100%;position:relative;border:1px solid #3c4554;background:#202631;color:#fff;border-radius:10px;padding:10px;text-align:left;box-shadow:inset 3px 0 0 0 var(--chip-accent,transparent)}
+    /* Horizontal chips: a fixed square art thumb on the left, text on the right.
+       Fixed thumb sizes keep every chip uniform no matter the source file. */
+    .unit{display:grid;grid-template-columns:84px minmax(0,1fr);gap:10px;align-items:center}
+    .chip-body{display:grid;gap:5px;min-width:0}
+    .chip-body>b{font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .chip-body>span,.chip-body>small{font-size:11px;color:#c1c7d2}
+    .chip-body>small{color:#d7b76c}
+    .building{display:grid;grid-template-columns:56px minmax(0,1fr);gap:8px;align-items:center;font-size:11px;background:#242017;border-color:#50462e;color:#e7d49e}
+    .building-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    /* Board art: fixed square thumbs with a frame, served from /cards/<id>.png
+       (same-faction stand-in while a card has no own art). A missing file hides
+       the img via hideArt, leaving the text. */
+    .thumb{display:block;width:84px;height:84px;object-fit:cover;border-radius:8px;background:#12161d;border:1px solid #2e3646}
+    .building .thumb{width:56px;height:56px}
+    @media(max-width:850px){.unit{grid-template-columns:64px minmax(0,1fr);gap:8px}.thumb{width:64px;height:64px}}
     /* Board tooltips (Phase A.1) — CSS-only, catalog data only (same visibility
        baseline as the existing chips: board units/buildings are already fully
        visible to both players). Absolutely positioned, so they never join the
@@ -243,21 +302,38 @@ import { SoundService } from './sound.service';
     .dot-badge{font-size:10px;line-height:1.4;font-weight:800;color:#7ad78d;background:#101a13;border:1px solid #2c5c3a;border-radius:6px;padding:0 4px}
     .stun-badge{font-size:10px;line-height:1.4;font-weight:800;color:#e8b44f;background:#20180a;border:1px solid #6e5426;border-radius:6px;padding:0 4px}
     .stagger-badge{font-size:10px;line-height:1.4;font-weight:800;color:#8fb7e8;background:#0f1620;border:1px solid #2d4a6b;border-radius:6px;padding:0 4px}
-    .unit:has(.badges)>b{padding-right:34px}
-    .unit:has(.badges :nth-child(2))>b{padding-right:62px}
-    .unit:has(.badges :nth-child(3))>b{padding-right:90px}
+    .unit:has(.badges) .chip-body>b{padding-right:34px}
+    .unit:has(.badges :nth-child(2)) .chip-body>b{padding-right:62px}
+    .unit:has(.badges :nth-child(3)) .chip-body>b{padding-right:90px}
     .tip-poison{display:block;font-size:11px;font-weight:700;color:#7ad78d;margin-top:5px}
     .tip-bonus{display:block;font-size:11px;font-weight:700;color:#d7b76c;margin-top:2px}
     .tip-stun{display:block;font-size:11px;font-weight:700;color:#e8b44f;margin-top:5px}
     .tip-stagger{display:block;font-size:11px;font-weight:700;color:#8fb7e8;margin-top:5px}
     /* M3 — fatigue readout on the player bars (GA-3a finite decks). */
     .fatigue{color:#ff8a5c;font-weight:800;font-size:12px}
-    .unit:hover>.tip,.unit:focus>.tip,.building:hover>.tip,.building:focus>.tip{display:block}
+    .unit:hover .tip,.unit:focus .tip,.building:hover .tip,.building:focus .tip{display:block}
     @media(max-width:850px){.tip{left:6px;right:6px;width:auto;transform:none}.slot.enemy .tip{bottom:auto;top:calc(100% + 8px)}}
     .hand { display:flex; gap:8px; overflow-x:auto; padding:10px 2px 14px; min-height:230px; align-items:flex-start; }
-    .footer-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.hint,.log{background:#11151d;border:1px solid #272d38;border-radius:12px;padding:12px;font-size:12px;color:#aeb6c5}.log{display:grid;gap:4px}.error{margin-top:8px;color:#ff9da5}
+    .footer-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.hint,.log{background:#11151d;border:1px solid #272d38;border-radius:12px;padding:12px;font-size:12px;color:#aeb6c5}.log{display:grid;gap:4px;align-content:start}.error{margin-top:8px;color:#ff9da5}
+    .log-head{display:flex;align-items:center;justify-content:space-between;gap:8px;color:#d7b76c;text-transform:uppercase;letter-spacing:.1em;font-size:10px;font-weight:800}
+    .ghost.small{background:transparent;color:#aeb6c5;border:1px solid #3e4655;padding:4px 10px;border-radius:7px;font-size:11px}
+    /* Full-log modal: the list scrolls inside the modal, never the page. */
+    .log-modal{min-width:min(560px,92vw);text-align:left}
+    .full-log{display:grid;gap:4px;max-height:min(60vh,480px);overflow-y:auto;font-size:12px;color:#c1c7d2;margin-top:10px}
+    .full-log .seq{color:#687183;margin-right:6px}
     .modal-backdrop{position:fixed;inset:0;background:#000b;display:grid;place-items:center;padding:20px}.modal{background:#151a23;border:1px solid #3b4352;border-radius:18px;padding:28px;max-width:440px;text-align:center}.modal h2{font-size:48px;margin:4px}.modal p{color:#aeb6c5;line-height:1.5}.modal button{background:#d7b76c;border:0;padding:11px 18px;border-radius:9px;font-weight:800}.eyebrow{text-transform:uppercase;letter-spacing:.15em;color:#d7b76c;font-size:10px}
-    @media(max-width:850px){.board{overflow-x:auto;grid-template-columns:repeat(4,180px);min-height:390px}.footer-grid{grid-template-columns:1fr}header{grid-template-columns:1fr auto}.turn{display:none}.playerbar{gap:10px}.game-shell{padding:8px}}
+    @media(max-width:850px){.board{overflow:auto;grid-template-columns:repeat(4,180px);min-height:0}.footer-grid{grid-template-columns:1fr}header{grid-template-columns:1fr auto}.turn{display:none}.playerbar{gap:10px}.game-shell{padding:8px}}
+    /* No page scroll on mobile: the shell is exactly one viewport tall and
+       every growing region scrolls internally (board/hand/log), so
+       document height never exceeds the viewport. Desktop keeps its natural
+       page flow untouched. */
+    @media(max-width:850px){
+      .game-shell{height:100dvh;max-height:100dvh;overflow:hidden;grid-template-rows:auto auto minmax(0,1fr) auto auto auto}
+      .slot{min-height:118px}
+      .hand{min-height:0;max-height:28dvh;overflow:auto}
+      .footer-grid{min-height:0}
+      .hint,.log{min-height:0;max-height:12dvh;overflow-y:auto}
+    }
     .modal-actions{display:flex;gap:10px;justify-content:center;margin-top:12px}.modal-actions .ghost{background:transparent;color:#aeb6c5;border:1px solid #3e4655;padding:11px 18px;border-radius:9px}.modal .waiting{color:#d7b76c;min-height:1.5em}
     /* Phase D D-2 — match summary stats in the victory modal. */
     .stats{width:100%;margin:14px 0 4px;border-collapse:collapse;font-size:12px;color:#c1c7d2}
@@ -269,6 +345,7 @@ import { SoundService } from './sound.service';
        existing 3-column (2-column mobile) header grid is undisturbed. */
     .header-right{display:flex;align-items:center;gap:8px;justify-self:end}
     .sound{font-size:16px;line-height:1;padding:8px 9px;border-radius:9px}
+    .ghost.lang{background:transparent;color:#d7b76c;border:1px solid #3e4655;padding:6px 10px;border-radius:8px;font-weight:800;font-size:12px}
     /* Phase A.2 — combat/turn animations. Pure CSS keyframes, non-blocking,
        re-triggered from JS by removing the class, forcing a reflow, re-adding
        it (see GameComponent.retrigger), so rapid successive updates restart
@@ -298,11 +375,14 @@ import { SoundService } from './sound.service';
 })
 export class GameComponent {
   readonly client = inject(GameClientService);
+  readonly i18n = inject(I18nService);
   readonly sound = inject(SoundService);
   private readonly el = inject(ElementRef);
   readonly selectedCard = signal<HandCard | null>(null);
   readonly selectedSpecialLane = signal<number | null>(null);
   readonly rematchRequested = signal(false);
+  /** Full match-log modal (footer "Full log" button). Local UI state only. */
+  readonly showFullLog = signal(false);
   readonly game = this.client.game;
   readonly self = computed(() => this.game()!.players[this.game()!.selfPlayerId]);
   readonly opponentId = computed<PlayerId>(() => {
@@ -421,6 +501,14 @@ export class GameComponent {
 
   getDef = getCard;
   cardName(cardId: string) { return getCard(cardId).name; }
+  /** This viewer's OWN side type of a lane (frame accent + name). */
+  ownSideType(lane: ClientLaneState) { return lane.sideTypes[this.game()!.selfPlayerId]; }
+  /** The opponent's side type of a lane (shown when the sides differ). */
+  enemySideType(lane: ClientLaneState) { return lane.sideTypes[this.opponentId()]; }
+  /** Board/hand art URL for a catalog card (stand-in while art is missing). */
+  artFor(cardId: string) { return cardArtUrl(cardId); }
+  /** Hide a board thumb whose file is missing (text fallback remains). */
+  hideArt(event: Event) { hideBrokenArt(event); }
   /** Faction accent for a lane frame, from the lane's fixed type. */
   laneAccent(faction: Faction) { return FACTION_THEME[faction].accent; }
   laneGlow(faction: Faction) { return FACTION_THEME[faction].glow; }

@@ -1,7 +1,9 @@
 /**
- * END-1 — the pool of selectable lane types. A match uses exactly 4 of these
- * (chosen by the room creator); the canonical lane order is this array
- * filtered to the selected set.
+ * The pool of selectable lane types. Each player picks their OWN 4 lanes from
+ * this pool (room creator, joiner via the join form, AI via the solo form), so
+ * the two sides of a lane — and the two decks — may differ. A match always
+ * runs exactly 4 lane positions; position `i` pairs side A's `i`-th lane with
+ * side B's `i`-th lane (each side normalized to canonical pool order).
  */
 export const LANE_TYPES = ['antlion', 'combine', 'rebel', 'zombie', 'guardian', 'wraith'] as const;
 export type LaneType = (typeof LANE_TYPES)[number];
@@ -38,6 +40,17 @@ export const DEFAULT_GAME_CONFIG: GameConfig = {
   laneTypes: DEFAULT_LANE_TYPES,
   escalationTurn: 15,
 };
+
+/**
+ * Per-player lane selections, positional: `first` belongs to the first player
+ * in `CreateGameOptions.players`, `second` to the other one. Each side holds
+ * exactly 4 validated lane types. Used by `createGame`; absent sides fall back
+ * to the shared `GameConfig.laneTypes` (mirrored board, legacy behavior).
+ */
+export interface PerPlayerLanes {
+  first: readonly LaneType[];
+  second: readonly LaneType[];
+}
 
 export type Effect =
   | { type: 'damage-unit'; amount: number }
@@ -191,7 +204,13 @@ export interface PlayerLaneState {
 
 export interface LaneState {
   index: number;
-  type: LaneType;
+  /**
+   * Per-side lane type: each player plays their faction cards into lanes of
+   * THEIR OWN side's type. The two sides of one position may differ (each
+   * player chose their own 4 lanes), in which case each deck is also built
+   * from its owner's lane factions only.
+   */
+  sideTypes: Record<PlayerId, LaneType>;
   sides: Record<PlayerId, PlayerLaneState>;
 }
 
@@ -324,7 +343,8 @@ export interface ClientPlayerLaneState {
 
 export interface ClientLaneState {
   index: number;
-  type: LaneType;
+  /** Per-side lane type (see LaneState.sideTypes) — public to both players. */
+  sideTypes: Record<PlayerId, LaneType>;
   sides: Record<PlayerId, ClientPlayerLaneState>;
 }
 

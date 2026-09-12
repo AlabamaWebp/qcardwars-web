@@ -356,7 +356,7 @@ function bestScoringLane(
 ): number | null {
   let best: { index: number; score: number } | null = null;
   for (const lane of state.lanes) {
-    if (cardFaction !== 'universal' && cardFaction !== lane.type) continue; // WRONG_LANE_TYPE
+    if (cardFaction !== 'universal' && cardFaction !== lane.sideTypes[playerId]) continue; // WRONG_LANE_TYPE
     const score = scoreLane(lane);
     if (score < VETO_SCORE) continue; // occupied slot / missing onPlay target
     if (!best || score > best.score) best = { index: lane.index, score };

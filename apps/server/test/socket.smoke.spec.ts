@@ -75,7 +75,7 @@ function laneFor(def: ReturnType<typeof getCard>, self: string, view: ClientGame
     const free = view.lanes.find((l) => !view.lanes[l.index].sides[self].unit);
     return free ? free.index : null;
   }
-  const idx = view.lanes.find((l) => l.type === def.faction && !view.lanes[l.index].sides[self].unit);
+  const idx = view.lanes.find((l) => l.sideTypes[self] === def.faction && !view.lanes[l.index].sides[self].unit);
   return idx ? idx.index : null;
 }
 
