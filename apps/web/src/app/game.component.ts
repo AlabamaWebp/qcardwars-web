@@ -313,7 +313,7 @@ import { SoundService } from './sound.service';
     .fatigue{color:#ff8a5c;font-weight:800;font-size:12px}
     .unit:hover .tip,.unit:focus .tip,.building:hover .tip,.building:focus .tip{display:block}
     @media(max-width:850px){.tip{left:6px;right:6px;width:auto;transform:none}.slot.enemy .tip{bottom:auto;top:calc(100% + 8px)}}
-    .hand { display:flex; gap:8px; overflow-x:auto; padding:10px 2px 14px; min-height:230px; align-items:flex-start; }
+    .hand { display:flex; gap:8px; overflow-x:auto; padding:10px 2px 14px; min-height:230px; align-items:stretch; }
     .footer-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.hint,.log{background:#11151d;border:1px solid #272d38;border-radius:12px;padding:12px;font-size:12px;color:#aeb6c5}.log{display:grid;gap:4px;align-content:start}.error{margin-top:8px;color:#ff9da5}
     .log-head{display:flex;align-items:center;justify-content:space-between;gap:8px;color:#d7b76c;text-transform:uppercase;letter-spacing:.1em;font-size:10px;font-weight:800}
     .ghost.small{background:transparent;color:#aeb6c5;border:1px solid #3e4655;padding:4px 10px;border-radius:7px;font-size:11px}
