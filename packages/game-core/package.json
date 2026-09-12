@@ -10,7 +10,8 @@
     "dev": "tsc -p tsconfig.json -w --preserveWatchOutput",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "sim": "node scripts/sim.cjs"
   },
   "devDependencies": {
     "typescript": "~6.0.0",

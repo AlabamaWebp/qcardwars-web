@@ -170,6 +170,123 @@ describe('Phase D D-1: chooseAiAction', () => {
   });
 });
 
+describe('M4: heuristic lane and target selection', () => {
+  /** Place an enemy/own unit with custom stats (bucket card def: no swarm/building interplay). */
+  function placeCustomUnit(
+    state: GameState,
+    laneIndex: number,
+    playerId: PlayerId,
+    attack: number,
+    health: number,
+    turnsSurvived = 1,
+  ): void {
+    state.lanes[laneIndex].sides[playerId].unit = {
+      uid: `test-custom-${playerId}-${laneIndex}-${attack}x${health}`,
+      cardId: 'bucket',
+      ownerId: playerId,
+      attack,
+      health,
+      maxHealth: health,
+      turnsSurvived,
+      specialUsesRemaining: 0,
+    };
+  }
+
+  it('prefers killing a high-threat enemy over a safe block', () => {
+    let state = aiTurn(game());
+    state.players.p2.hand = [];
+    state = structuredClone(state);
+    placeCustomUnit(state, 0, 'p1', 2, 5); // low threat: mercenary (3/3) survives the trade
+    placeCustomUnit(state, 1, 'p1', 8, 2); // high threat but killable next turn (3 atk >= 2 hp)
+    const mercenary = giveCard(state, 'p2', 'universal-mercenary'); // 3/3, universal
+    state = mercenary.state;
+
+    const action = chooseAiAction(state, 'p2');
+    expect(action?.type).toBe('play-card');
+    if (action?.type === 'play-card') {
+      expect(action.handCardUid).toBe(mercenary.uid);
+      expect(action.laneIndex).toBe(1); // kill the 8-threat unit, not the safe lane 0
+    }
+    const next = applyAction(state, action!);
+    expect(next.lanes[1].sides.p2.unit?.cardId).toBe('universal-mercenary');
+  });
+
+  it('avoids an outmatched lane in favor of an open lane', () => {
+    let state = aiTurn(game());
+    state.players.p2.hand = [];
+    state = structuredClone(state);
+    placeCustomUnit(state, 0, 'p1', 6, 8); // would kill the 3/2 volunteer without a trade
+    const volunteer = giveCard(state, 'p2', 'universal-demolition-volunteer'); // 3/2, universal
+    state = volunteer.state;
+
+    const action = chooseAiAction(state, 'p2');
+    expect(action?.type).toBe('play-card');
+    if (action?.type === 'play-card') {
+      expect(action.laneIndex).toBe(1); // open lane beats the dead-weight block in lane 0
+    }
+  });
+
+  it('stuns the highest-attack enemy unit', () => {
+    let state = aiTurn(game());
+    state.players.p2.hand = [];
+    state = structuredClone(state);
+    placeUnit(state, 0, 'p1', 'bucket', 1); // 2/4
+    placeCustomUnit(state, 2, 'p1', 5, 3); // 5/3 — bigger threat
+    const stasis = giveCard(state, 'p2', 'power-stasis-field'); // cost 2, enemy-unit stun
+    state = stasis.state;
+
+    const action = chooseAiAction(state, 'p2');
+    expect(action).toEqual({
+      type: 'play-card',
+      playerId: 'p2',
+      expectedRevision: state.revision,
+      handCardUid: stasis.uid,
+      laneIndex: 2,
+      targetLaneIndex: 2,
+    });
+  });
+
+  it('plays a building on a lane that already has a friendly unit', () => {
+    let state = aiTurn(game());
+    state.players.p2.hand = [];
+    state = structuredClone(state);
+    placeUnit(state, 0, 'p2', 'bucket', 1); // friendly unit occupies the unit slot
+    const bunker = giveCard(state, 'p2', 'building-bunker'); // universal, cost 4
+    state = bunker.state;
+
+    const action = chooseAiAction(state, 'p2');
+    expect(action?.type).toBe('play-card');
+    if (action?.type === 'play-card') {
+      expect(action.laneIndex).toBe(0); // unit + building coexist in lane 0
+    }
+    const next = applyAction(state, action!);
+    expect(next.lanes[0].sides.p2.building?.cardId).toBe('building-bunker');
+    expect(next.lanes[0].sides.p2.unit?.cardId).toBe('bucket'); // unit untouched
+  });
+
+  it('does not play an onPlay enemy-unit card when no enemy is on the board', () => {
+    let state = aiTurn(game());
+    state.players.p2.hand = [];
+    const harrier = giveCard(state, 'p2', 'antlion-tunnel-harrier'); // onPlay needs an enemy unit
+    state = harrier.state;
+
+    expect(chooseAiAction(state, 'p2')).toEqual({
+      type: 'end-turn',
+      playerId: 'p2',
+      expectedRevision: state.revision,
+    });
+
+    // Once an enemy occupies the antlion lane, the same card plays there.
+    state = structuredClone(state);
+    placeCustomUnit(state, 0, 'p1', 2, 4);
+    const action = chooseAiAction(state, 'p2');
+    expect(action?.type).toBe('play-card');
+    if (action?.type === 'play-card') {
+      expect(action.laneIndex).toBe(0);
+    }
+  });
+});
+
 describe('M2 catalog: AI plays the new cards legally', () => {
   it('plays the highest-cost new M2 unit legally and it applies cleanly', () => {
     let state = aiTurn(game());
